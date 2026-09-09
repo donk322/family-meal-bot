@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: family-meal-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MINI_APP_URL
+        sync: false
+      - key: COOK_CHAT_ID
+        sync: false
+      - key: REMINDER_HOUR
+        value: "20"
+      - key: COMPILE_HOUR
+        value: "21"
+      - key: COMPILE_MINUTE
+        value: "30"
+      - key: TIMEZONE
+        value: Africa/Johannesburg
+      - key: PYTHON_VERSION
+        value: "3.12.6"

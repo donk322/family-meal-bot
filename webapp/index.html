@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Меню на завтра</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --accent: #4a7c59;
+    --accent-soft: #e8f0ea;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--tg-theme-bg-color, #ffffff);
+    color: var(--tg-theme-text-color, #1c1c1c);
+    padding: 20px 18px 100px;
+    line-height: 1.45;
+  }
+  h1 {
+    font-size: 21px;
+    font-weight: 600;
+    margin: 4px 0 2px;
+  }
+  .sub {
+    color: var(--tg-theme-hint-color, #8a8a8a);
+    font-size: 14px;
+    margin: 0 0 20px;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 3px 9px;
+    margin-bottom: 16px;
+  }
+  section {
+    margin-bottom: 26px;
+  }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+  .dish-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
+    border-radius: 12px;
+    padding: 8px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    background: var(--tg-theme-bg-color, #ffffff);
+  }
+  .dish-card.selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .dish-photo {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    object-fit: cover;
+    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+  }
+  .dish-photo-fallback {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+  }
+  .dish-name {
+    font-size: 15px;
+    font-weight: 500;
+    margin: 0 0 2px;
+  }
+  .dish-desc {
+    font-size: 13px;
+    color: var(--tg-theme-hint-color, #8a8a8a);
+    margin: 0;
+  }
+  label.notes-label {
+    display: block;
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  textarea {
+    width: 100%;
+    min-height: 56px;
+    border-radius: 12px;
+    border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
+    background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+    color: var(--tg-theme-text-color, #1c1c1c);
+    padding: 12px 14px;
+    font-size: 15px;
+    font-family: inherit;
+    resize: vertical;
+  }
+  textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .error {
+    color: #c0392b;
+    font-size: 13px;
+    margin-top: 4px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <span class="badge">Без глютена — как всегда</span>
+  <h1 id="greeting">Что приготовить завтра?</h1>
+  <p class="sub">Выбери одно блюдо на завтрак и одно на ужин — повар получит это вместе с остальными.</p>
+
+  <section>
+    <h2>Завтрак</h2>
+    <div id="breakfastList"></div>
+    <p class="error" id="breakfastErr">Выбери что-нибудь на завтрак</p>
+  </section>
+
+  <section>
+    <h2>Ужин</h2>
+    <div id="dinnerList"></div>
+    <p class="error" id="dinnerErr">Выбери что-нибудь на ужин</p>
+  </section>
+
+  <section>
+    <label class="notes-label" for="notes">Комментарии (необязательно)</label>
+    <textarea id="notes" placeholder="Аллергии, нелюбимые продукты, гости и т.д."></textarea>
+  </section>
+
+<script>
+  // photoEmoji is only the fallback shown when images/<id>.jpg hasn't been added yet
+  const BREAKFAST_DISHES = [
+    {"id": "breakfast_bacon_eggs", "name": "Яичница с беконом", "description": "Самый простой и любимый завтрак — яйца и хрустящий бекон", "photoEmoji": "🍳"},
+    {"id": "breakfast_english", "name": "Английский завтрак", "description": "Яйца, бекон, колбаски и помидор — всё на одной тарелке", "photoEmoji": "🍳"},
+    {"id": "breakfast_eggs_benedict", "name": "Яйца Бенедикт", "description": "Пашот и голландский соус на вашем безглютеновом тосте с ветчиной", "photoEmoji": "🍳"},
+    {"id": "breakfast_ham_cheese_omelette", "name": "Омлет с ветчиной и сыром", "description": "Классический сытный омлет с ветчиной и расплавленным сыром", "photoEmoji": "🍳"},
+    {"id": "breakfast_steak_eggs", "name": "Стейк с яичницей", "description": "Сочный стейк и два яйца с жидким желтком", "photoEmoji": "🥩"},
+    {"id": "breakfast_shakshuka", "name": "Шакшука", "description": "Яйца, запечённые в пряном томатном соусе с перцем", "photoEmoji": "🍳"},
+    {"id": "breakfast_potato_bacon_frittata", "name": "Фриттата с картофелем и беконом", "description": "Запечённый омлет с картофелем, беконом и сыром", "photoEmoji": "🍳"},
+    {"id": "breakfast_salmon_scramble_toast", "name": "Скрэмбл с лососем на тосте", "description": "Нежный скрэмбл и слабосолёный лосось на безглютеновом тосте", "photoEmoji": "🐟"},
+    {"id": "breakfast_avocado_toast_egg", "name": "Авокадо-тост с яйцом пашот", "description": "Тост с авокадо и яйцом пашот на вашем безглютеновом хлебе", "photoEmoji": "🥑"},
+    {"id": "breakfast_beef_hash_egg", "name": "Хэш с говядиной и яйцом", "description": "Обжаренный картофель с говядиной и яйцом сверху", "photoEmoji": "🍳"}
+  ];
+
+  const DINNER_DISHES = [
+    {"id": "dinner_grilled_chicken_veg", "name": "Курица с овощами на гриле", "description": "Куриное филе на гриле с цукини и болгарским перцем", "photoEmoji": "🍗"},
+    {"id": "dinner_beef_stroganoff_rice", "name": "Бефстроганов с рисом", "description": "Говядина в сливочном соусе с грибами, подаётся с рисом", "photoEmoji": "🍲"},
+    {"id": "dinner_baked_salmon_potato", "name": "Лосось запечённый с картофелем", "description": "Филе лосося с картофелем, лимоном и укропом", "photoEmoji": "🐟"},
+    {"id": "dinner_mushroom_risotto", "name": "Ризотто с грибами", "description": "Кремовое ризотто на рисе арборио с шампиньонами", "photoEmoji": "🍚"},
+    {"id": "dinner_beef_tacos_corn", "name": "Тако с говяжьим фаршем на кукурузных тако-шеллах", "description": "Хрустящие кукурузные тако-шеллы с говяжьим фаршем, авокадо и специями", "photoEmoji": "🌮"},
+    {"id": "dinner_chicken_souvlaki_tzatziki", "name": "Куриный сувлаки с дзадзики", "description": "Куриные шашлычки на гриле с соусом дзадзики и рисом", "photoEmoji": "🍗"},
+    {"id": "dinner_steak_chimichurri", "name": "Стейк с чимичурри", "description": "Говядина на гриле с аргентинским соусом чимичурри и картофелем", "photoEmoji": "🥩"},
+    {"id": "dinner_chicken_plov", "name": "Плов с курицей", "description": "Ароматный плов с куриным бедром, морковью и специями", "photoEmoji": "🍛"},
+    {"id": "dinner_beef_buckwheat_stew", "name": "Тушёная говядина с гречкой", "description": "Мягкая тушёная говядина с рассыпчатой гречневой кашей", "photoEmoji": "🍲"},
+    {"id": "dinner_fish_cutlets_mash", "name": "Рыбные котлеты с картофельным пюре", "description": "Нежные котлеты из белой рыбы с пюре из картофеля", "photoEmoji": "🐟"}
+  ];
+
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    const name = tg.initDataUnsafe?.user?.first_name;
+    if (name) document.getElementById('greeting').textContent = `Что приготовить завтра, ${name}?`;
+  }
+
+  let selectedBreakfast = null;
+  let selectedDinner = null;
+
+  function renderDishes(containerId, dishes, onSelect) {
+    const container = document.getElementById(containerId);
+    dishes.forEach(dish => {
+      const card = document.createElement('div');
+      card.className = 'dish-card';
+      card.dataset.id = dish.id;
+      card.innerHTML = `
+        <img class="dish-photo" src="images/${dish.id}.jpg" alt=""
+             onerror="this.outerHTML='<div class=&quot;dish-photo-fallback&quot;>${dish.photoEmoji}</div>'">
+        <div>
+          <p class="dish-name">${dish.name}</p>
+          <p class="dish-desc">${dish.description}</p>
+        </div>
+      `;
+      card.onclick = () => onSelect(dish.id, container);
+      container.appendChild(card);
+    });
+  }
+
+  function selectCard(id, container, setSelected) {
+    setSelected(id);
+    [...container.children].forEach(card => {
+      card.classList.toggle('selected', card.dataset.id === id);
+    });
+  }
+
+  renderDishes('breakfastList', BREAKFAST_DISHES, (id, container) =>
+    selectCard(id, container, v => selectedBreakfast = v)
+  );
+  renderDishes('dinnerList', DINNER_DISHES, (id, container) =>
+    selectCard(id, container, v => selectedDinner = v)
+  );
+
+  function submit() {
+    const breakfastErr = document.getElementById('breakfastErr');
+    const dinnerErr = document.getElementById('dinnerErr');
+    let ok = true;
+
+    if (!selectedBreakfast) {
+      breakfastErr.style.display = 'block';
+      ok = false;
+    } else {
+      breakfastErr.style.display = 'none';
+    }
+
+    if (!selectedDinner) {
+      dinnerErr.style.display = 'block';
+      ok = false;
+    } else {
+      dinnerErr.style.display = 'none';
+    }
+
+    if (!ok) return;
+
+    const payload = {
+      breakfast: selectedBreakfast,
+      dinner: selectedDinner,
+      notes: document.getElementById('notes').value.trim(),
+    };
+
+    if (tg) {
+      tg.sendData(JSON.stringify(payload));
+    } else {
+      alert('Открой это внутри Telegram, чтобы отправить ответ');
+    }
+  }
+
+  if (tg) {
+    tg.MainButton.setText('Отправить');
+    tg.MainButton.show();
+    tg.MainButton.onClick(submit);
+  }
+</script>
+</body>
+</html>
