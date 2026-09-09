@@ -44,19 +44,19 @@ DISHES_FILE = BASE_DIR / "dishes.json"
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-DISHES = json.loads(DISHES_FILE.read_text())
+DISHES = json.loads(DISHES_FILE.read_text(encoding="utf-8"))
 
 
 # ---------- storage helpers ----------
 
 def load_json(path, default):
     if path.exists():
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     return default
 
 
 def save_json(path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_family():
