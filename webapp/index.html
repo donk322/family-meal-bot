@@ -7,8 +7,9 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
-    --accent: #4a7c59;
-    --accent-soft: #e8f0ea;
+    --accent: #3f6b4a;
+    --accent-soft: #eaf1ec;
+    --heading-font: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
   }
   * { box-sizing: border-box; }
   body {
@@ -16,46 +17,55 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--tg-theme-bg-color, #ffffff);
     color: var(--tg-theme-text-color, #1c1c1c);
-    padding: 20px 18px 100px;
+    padding: 28px 20px 100px;
     line-height: 1.45;
   }
+  .kicker {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin: 0 0 6px;
+  }
   h1 {
-    font-size: 21px;
-    font-weight: 600;
-    margin: 4px 0 2px;
+    font-family: var(--heading-font);
+    font-weight: 400;
+    font-size: 26px;
+    margin: 0 0 6px;
   }
   .sub {
     color: var(--tg-theme-hint-color, #8a8a8a);
     font-size: 14px;
-    margin: 0 0 20px;
+    margin: 0 0 8px;
   }
-  .badge {
-    display: inline-block;
-    font-size: 12px;
-    color: var(--accent);
-    background: var(--accent-soft);
-    border-radius: 8px;
-    padding: 3px 9px;
-    margin-bottom: 16px;
+  .rule {
+    border: none;
+    border-top: 1px solid var(--tg-theme-hint-color, #e2e2e2);
+    opacity: 0.5;
+    margin: 20px 0 24px;
   }
   section {
-    margin-bottom: 26px;
+    margin-bottom: 28px;
   }
   h2 {
-    font-size: 15px;
-    font-weight: 600;
-    margin: 0 0 10px;
+    font-family: var(--heading-font);
+    font-size: 18px;
+    font-weight: 400;
+    font-style: italic;
+    margin: 0 0 12px;
+    color: var(--accent);
   }
   .dish-card {
     display: flex;
     align-items: center;
     gap: 12px;
-    border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
+    border: 1px solid var(--tg-theme-hint-color, #e2e2e2);
     border-radius: 12px;
     padding: 8px;
     margin-bottom: 8px;
     cursor: pointer;
     background: var(--tg-theme-bg-color, #ffffff);
+    transition: border-color 0.15s ease, background 0.15s ease;
   }
   .dish-card.selected {
     border-color: var(--accent);
@@ -92,9 +102,11 @@
   }
   label.notes-label {
     display: block;
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 8px;
+    font-family: var(--heading-font);
+    font-size: 18px;
+    font-style: italic;
+    color: var(--accent);
+    margin-bottom: 10px;
   }
   textarea {
     width: 100%;
@@ -118,12 +130,19 @@
     margin-top: 4px;
     display: none;
   }
+  .footnote {
+    font-size: 12px;
+    color: var(--tg-theme-hint-color, #999);
+    text-align: center;
+    margin-top: 8px;
+  }
 </style>
 </head>
 <body>
-  <span class="badge">Без глютена — как всегда</span>
+  <p class="kicker">Семейное меню</p>
   <h1 id="greeting">Что приготовить завтра?</h1>
-  <p class="sub">Выбери одно блюдо на завтрак и одно на ужин — повар получит это вместе с остальными.</p>
+  <p class="sub">Выбери одно или несколько блюд на завтрак и ужин — повар получит это вместе с остальными.</p>
+  <hr class="rule">
 
   <section>
     <h2>Завтрак</h2>
@@ -138,9 +157,11 @@
   </section>
 
   <section>
-    <label class="notes-label" for="notes">Комментарии (необязательно)</label>
-    <textarea id="notes" placeholder="Аллергии, нелюбимые продукты, гости и т.д."></textarea>
+    <label class="notes-label" for="notes">Комментарии</label>
+    <textarea id="notes" placeholder="Аллергии, нелюбимые продукты, гости и т.д. (необязательно)"></textarea>
   </section>
+
+  <p class="footnote">Все блюда в меню без глютена</p>
 
 <script>
   // photoEmoji is only the fallback shown when images/<id>.jpg hasn't been added yet
@@ -178,10 +199,10 @@
     if (name) document.getElementById('greeting').textContent = `Что приготовить завтра, ${name}?`;
   }
 
-  let selectedBreakfast = null;
-  let selectedDinner = null;
+  let selectedBreakfast = new Set();
+  let selectedDinner = new Set();
 
-  function renderDishes(containerId, dishes, onSelect) {
+  function renderDishes(containerId, dishes, selectedSet) {
     const container = document.getElementById(containerId);
     dishes.forEach(dish => {
       const card = document.createElement('div');
@@ -195,38 +216,35 @@
           <p class="dish-desc">${dish.description}</p>
         </div>
       `;
-      card.onclick = () => onSelect(dish.id, container);
+      card.onclick = () => {
+        if (selectedSet.has(dish.id)) {
+          selectedSet.delete(dish.id);
+          card.classList.remove('selected');
+        } else {
+          selectedSet.add(dish.id);
+          card.classList.add('selected');
+        }
+      };
       container.appendChild(card);
     });
   }
 
-  function selectCard(id, container, setSelected) {
-    setSelected(id);
-    [...container.children].forEach(card => {
-      card.classList.toggle('selected', card.dataset.id === id);
-    });
-  }
-
-  renderDishes('breakfastList', BREAKFAST_DISHES, (id, container) =>
-    selectCard(id, container, v => selectedBreakfast = v)
-  );
-  renderDishes('dinnerList', DINNER_DISHES, (id, container) =>
-    selectCard(id, container, v => selectedDinner = v)
-  );
+  renderDishes('breakfastList', BREAKFAST_DISHES, selectedBreakfast);
+  renderDishes('dinnerList', DINNER_DISHES, selectedDinner);
 
   function submit() {
     const breakfastErr = document.getElementById('breakfastErr');
     const dinnerErr = document.getElementById('dinnerErr');
     let ok = true;
 
-    if (!selectedBreakfast) {
+    if (selectedBreakfast.size === 0) {
       breakfastErr.style.display = 'block';
       ok = false;
     } else {
       breakfastErr.style.display = 'none';
     }
 
-    if (!selectedDinner) {
+    if (selectedDinner.size === 0) {
       dinnerErr.style.display = 'block';
       ok = false;
     } else {
@@ -236,8 +254,8 @@
     if (!ok) return;
 
     const payload = {
-      breakfast: selectedBreakfast,
-      dinner: selectedDinner,
+      breakfast: [...selectedBreakfast],
+      dinner: [...selectedDinner],
       notes: document.getElementById('notes').value.trim(),
     };
 

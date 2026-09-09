@@ -175,19 +175,14 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     data = json.loads(update.effective_message.web_app_data.data)
 
-    breakfast_id = data.get("breakfast") or ""
-    dinner_id = data.get("dinner") or ""
-
-    if breakfast_id and breakfast_id not in DISHES:
-        breakfast_id = ""
-    if dinner_id and dinner_id not in DISHES:
-        dinner_id = ""
+    breakfast_ids = [d for d in (data.get("breakfast") or []) if d in DISHES]
+    dinner_ids = [d for d in (data.get("dinner") or []) if d in DISHES]
 
     responses = load_today_responses()
     responses[str(user.id)] = {
         "name": user.first_name,
-        "breakfast": breakfast_id,
-        "dinner": dinner_id,
+        "breakfast": breakfast_ids,
+        "dinner": dinner_ids,
         "notes": data.get("notes", ""),
     }
     save_today_responses(responses)
@@ -211,10 +206,11 @@ async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
 
 
 def aggregate_ingredients(responses):
-    """Sum ingredient amounts needed across every person's breakfast + dinner pick."""
+    """Sum ingredient amounts needed across every person's chosen dishes."""
     needed = {}
     for r in responses.values():
-        for dish_id in (r.get("breakfast"), r.get("dinner")):
+        chosen_dishes = list(r.get("breakfast", [])) + list(r.get("dinner", []))
+        for dish_id in chosen_dishes:
             if not dish_id or dish_id not in DISHES:
                 continue
             for ing in DISHES[dish_id]["ingredients"]:
@@ -263,18 +259,21 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     person_lines = []
     for r in responses.values():
         parts = [f"{r['name']}:"]
-        for meal_label, dish_id in (("завтрак", r.get("breakfast")), ("ужин", r.get("dinner"))):
-            if dish_id and dish_id in DISHES:
-                dish = DISHES[dish_id]
-                ingredients = ", ".join(
-                    f"{ing['name']} {ing['amount_per_serving']} {ing['unit']}"
-                    for ing in dish["ingredients"]
-                )
-                steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
-                parts.append(
-                    f"  {meal_label} — {dish['name']}. Ингредиенты: {ingredients}. "
-                    f"Приготовление: {steps} Подача: {dish['serving_note']}"
-                )
+        for meal_label, dish_ids in (("завтрак", r.get("breakfast", [])), ("ужин", r.get("dinner", []))):
+            if dish_ids:
+                for dish_id in dish_ids:
+                    if dish_id not in DISHES:
+                        continue
+                    dish = DISHES[dish_id]
+                    ingredients = ", ".join(
+                        f"{ing['name']} {ing['amount_per_serving']} {ing['unit']}"
+                        for ing in dish["ingredients"]
+                    )
+                    steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
+                    parts.append(
+                        f"  {meal_label} — {dish['name']}. Ингредиенты: {ingredients}. "
+                        f"Приготовление: {steps} Подача: {dish['serving_note']}"
+                    )
             else:
                 parts.append(f"  {meal_label} — не выбрано")
         if r.get("notes"):
