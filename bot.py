@@ -57,6 +57,14 @@ client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 DISHES = json.loads(DISHES_FILE.read_text())
 
+# "Бытовые" ингредиенты (соль, масло, специи, зелень для украшения), которые
+# почти всегда есть под рукой — не учитываются при проверке доступности блюд.
+PANTRY_STAPLES = {
+    "соль", "чёрный перец", "растительное масло", "оливковое масло",
+    "паприка", "зира", "орегано", "розмарин", "чили хлопья",
+    "уксус", "красный винный уксус", "горчица", "свежая зелень",
+}
+
 
 def build_ingredient_typical_usage():
     """Average amount_per_serving for each ingredient across every dish that uses it.
@@ -107,11 +115,6 @@ def compute_unavailable_dishes():
     """Список id блюд, которые нельзя приготовить — не хватает ингредиента
     даже на одну порцию. Мелкие "бытовые" ингредиенты (соль, масло, специи,
     зелень для украшения) не блокируют блюдо — почти всегда есть под рукой."""
-    PANTRY_STAPLES = {
-        "соль", "чёрный перец", "растительное масло", "оливковое масло",
-        "паприка", "зира", "орегано", "розмарин", "чили хлопья",
-        "уксус", "красный винный уксус", "горчица", "свежая зелень",
-    }
     inventory = load_inventory()
     unavailable = []
     for dish_id, dish in DISHES.items():
@@ -238,6 +241,29 @@ async def restock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_json(LAST_SHOPPING_LIST_FILE, {})
 
     await update.message.reply_text("Готово, запасы пополнены по последнему списку покупок.")
+
+
+async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    inventory = load_inventory()
+    missing = {}
+    for dish in DISHES.values():
+        for ing in dish["ingredients"]:
+            if ing["name"] in PANTRY_STAPLES:
+                continue
+            have = inventory.get(ing["name"], {}).get("amount", 0)
+            if have < ing["amount_per_serving"]:
+                missing[ing["name"]] = ing["unit"]
+
+    if not missing:
+        await update.message.reply_text(
+            "Всё есть — любое блюдо из меню можно готовить прямо сейчас."
+        )
+        return
+
+    lines = [f"- {name} ({unit})" for name, unit in sorted(missing.items())]
+    await update.message.reply_text(
+        "Чтобы открыть больше блюд из меню, докупите:\n" + "\n".join(lines)
+    )
 
 
 async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -557,6 +583,7 @@ def main():
     app.add_handler(CommandHandler("addstock", addstock))
     app.add_handler(CommandHandler("updatestock", updatestock_cmd))
     app.add_handler(CommandHandler("restock", restock))
+    app.add_handler(CommandHandler("whatstobuy", whatstobuy_cmd))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
