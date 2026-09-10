@@ -105,11 +105,19 @@ def save_inventory(inventory):
 
 def compute_unavailable_dishes():
     """Список id блюд, которые нельзя приготовить — не хватает ингредиента
-    даже на одну порцию."""
+    даже на одну порцию. Мелкие "бытовые" ингредиенты (соль, масло, специи,
+    зелень для украшения) не блокируют блюдо — почти всегда есть под рукой."""
+    PANTRY_STAPLES = {
+        "соль", "чёрный перец", "растительное масло", "оливковое масло",
+        "паприка", "зира", "орегано", "розмарин", "чили хлопья",
+        "уксус", "красный винный уксус", "горчица", "свежая зелень",
+    }
     inventory = load_inventory()
     unavailable = []
     for dish_id, dish in DISHES.items():
         for ing in dish["ingredients"]:
+            if ing["name"] in PANTRY_STAPLES:
+                continue
             have = inventory.get(ing["name"], {}).get("amount", 0)
             if have < ing["amount_per_serving"]:
                 unavailable.append(dish_id)
