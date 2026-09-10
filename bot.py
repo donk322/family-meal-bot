@@ -103,6 +103,20 @@ def save_inventory(inventory):
     save_json(INVENTORY_FILE, inventory)
 
 
+def compute_unavailable_dishes():
+    """Список id блюд, которые нельзя приготовить — не хватает ингредиента
+    даже на одну порцию."""
+    inventory = load_inventory()
+    unavailable = []
+    for dish_id, dish in DISHES.items():
+        for ing in dish["ingredients"]:
+            have = inventory.get(ing["name"], {}).get("amount", 0)
+            if have < ing["amount_per_serving"]:
+                unavailable.append(dish_id)
+                break
+    return unavailable
+
+
 def today_responses_file():
     return DATA_DIR / f"responses_{datetime.now(TIMEZONE).date()}.json"
 
@@ -496,9 +510,17 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
 
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
+        if self.path == "/availability":
+            body = json.dumps({"unavailable": compute_unavailable_dishes()}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
 
     def log_message(self, *args):
         pass  # keep Render's request logs quiet

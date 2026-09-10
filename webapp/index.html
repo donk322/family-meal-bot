@@ -71,6 +71,20 @@
     border-color: var(--accent);
     background: var(--accent-soft);
   }
+  .dish-card.unavailable {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .dish-card.unavailable .dish-photo,
+  .dish-card.unavailable .dish-photo-fallback {
+    filter: grayscale(1);
+  }
+  .unavailable-label {
+    font-size: 11px;
+    color: #c0392b;
+    font-weight: 500;
+    margin: 2px 0 0;
+  }
   .dish-photo {
     width: 56px;
     height: 56px;
@@ -224,6 +238,8 @@
   const EGG_OPTIONS = ["Жидкий желток", "Средний желток", "Полностью готовый"];
   const MEAT_OPTIONS = ["С кровью", "Слабой прожарки", "Средней прожарки", "Почти прожаренное", "Полностью прожаренное"];
 
+  const API_BASE_URL = 'https://family-meal-bot-er5p.onrender.com';
+
   const tg = window.Telegram?.WebApp;
   if (tg) {
     tg.ready();
@@ -260,11 +276,12 @@
     panel.appendChild(row);
   }
 
-  function renderDishes(containerId, dishes, selectedSet) {
+  function renderDishes(containerId, dishes, selectedSet, unavailableSet) {
     const container = document.getElementById(containerId);
     dishes.forEach(dish => {
+      const isUnavailable = unavailableSet.has(dish.id);
       const card = document.createElement('div');
-      card.className = 'dish-card';
+      card.className = 'dish-card' + (isUnavailable ? ' unavailable' : '');
       card.dataset.id = dish.id;
       card.innerHTML = `
         <img class="dish-photo" src="images/${dish.id}.jpg" alt=""
@@ -272,6 +289,7 @@
         <div>
           <p class="dish-name">${dish.name}</p>
           <p class="dish-desc">${dish.description}</p>
+          ${isUnavailable ? '<p class="unavailable-label">Нет нужных продуктов</p>' : ''}
         </div>
       `;
 
@@ -284,24 +302,41 @@
         if (dish.customize.includes('meat')) buildPillRow(dish.id, 'meat', MEAT_OPTIONS, panel);
       }
 
-      card.onclick = () => {
-        if (selectedSet.has(dish.id)) {
-          selectedSet.delete(dish.id);
-          card.classList.remove('selected');
-          if (panel) panel.style.display = 'none';
-        } else {
-          selectedSet.add(dish.id);
-          card.classList.add('selected');
-          if (panel) panel.style.display = 'block';
-        }
-      };
+      if (!isUnavailable) {
+        card.onclick = () => {
+          if (selectedSet.has(dish.id)) {
+            selectedSet.delete(dish.id);
+            card.classList.remove('selected');
+            if (panel) panel.style.display = 'none';
+          } else {
+            selectedSet.add(dish.id);
+            card.classList.add('selected');
+            if (panel) panel.style.display = 'block';
+          }
+        };
+      }
       container.appendChild(card);
       if (panel) container.appendChild(panel);
     });
   }
 
-  renderDishes('breakfastList', BREAKFAST_DISHES, selectedBreakfast);
-  renderDishes('dinnerList', DINNER_DISHES, selectedDinner);
+  async function fetchUnavailableDishes() {
+    try {
+      const res = await fetch(`${API_BASE_URL}/availability`);
+      if (!res.ok) throw new Error('bad response');
+      const data = await res.json();
+      return new Set(data.unavailable || []);
+    } catch (e) {
+      // If the check fails (bot asleep, network hiccup), fail open —
+      // better to show everything than to block the whole menu.
+      return new Set();
+    }
+  }
+
+  fetchUnavailableDishes().then(unavailable => {
+    renderDishes('breakfastList', BREAKFAST_DISHES, selectedBreakfast, unavailable);
+    renderDishes('dinnerList', DINNER_DISHES, selectedDinner, unavailable);
+  });
 
   function submit() {
     const breakfastErr = document.getElementById('breakfastErr');
