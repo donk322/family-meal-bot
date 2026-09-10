@@ -1,9 +1,7 @@
 import os
 import json
 import logging
-import threading
 from datetime import time as dtime, datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -44,19 +42,19 @@ DISHES_FILE = BASE_DIR / "dishes.json"
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-DISHES = json.loads(DISHES_FILE.read_text(encoding="utf-8"))
+DISHES = json.loads(DISHES_FILE.read_text())
 
 
 # ---------- storage helpers ----------
 
 def load_json(path, default):
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text())
     return default
 
 
 def save_json(path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def load_family():
@@ -245,6 +243,30 @@ def apply_inventory(needed):
     return shopping_list, inventory
 
 
+def plural_portions(n):
+    if n % 10 == 1 and n % 100 != 11:
+        return "порция"
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
+        return "порции"
+    return "порций"
+
+
+def build_dish_groups(responses):
+    """Group selections by (meal_label, dish_id) -> list of person names.
+
+    This lets the cook batch-cook one dish for several people at once
+    instead of repeating the same recipe person by person.
+    """
+    groups = {"завтрак": {}, "ужин": {}}
+    for r in responses.values():
+        for meal_label, dish_ids in (("завтрак", r.get("breakfast", [])), ("ужин", r.get("dinner", []))):
+            for dish_id in dish_ids:
+                if dish_id not in DISHES:
+                    continue
+                groups[meal_label].setdefault(dish_id, []).append(r["name"])
+    return groups
+
+
 async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     if not COOK_CHAT_ID:
         logger.warning("COOK_CHAT_ID не задан — некому отправлять план")
@@ -255,32 +277,35 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Пока никто не ответил — пропускаю сборку")
         return
 
-    # Build per-person plan from the fixed catalog (deterministic — no AI here)
-    person_lines = []
-    for r in responses.values():
-        parts = [f"{r['name']}:"]
-        for meal_label, dish_ids in (("завтрак", r.get("breakfast", [])), ("ужин", r.get("dinner", []))):
-            if dish_ids:
-                for dish_id in dish_ids:
-                    if dish_id not in DISHES:
-                        continue
-                    dish = DISHES[dish_id]
-                    ingredients = ", ".join(
-                        f"{ing['name']} {ing['amount_per_serving']} {ing['unit']}"
-                        for ing in dish["ingredients"]
-                    )
-                    steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
-                    parts.append(
-                        f"  {meal_label} — {dish['name']}. Ингредиенты: {ingredients}. "
-                        f"Приготовление: {steps} Подача: {dish['serving_note']}"
-                    )
-            else:
-                parts.append(f"  {meal_label} — не выбрано")
-        if r.get("notes"):
-            parts.append(f"  Комментарий: {r['notes']}")
-        person_lines.append("\n".join(parts))
+    # Group by dish so the cook can batch-cook for several people at once
+    # instead of repeating the same recipe person by person.
+    groups = build_dish_groups(responses)
+    meal_sections = []
+    for meal_label in ("завтрак", "ужин"):
+        dish_ids = groups[meal_label]
+        if not dish_ids:
+            continue
+        lines = [f"## {meal_label.capitalize()}"]
+        for dish_id, people in dish_ids.items():
+            dish = DISHES[dish_id]
+            portions = len(people)
+            scaled_ingredients = ", ".join(
+                f"{ing['name']} {round(ing['amount_per_serving'] * portions, 1)} {ing['unit']}"
+                for ing in dish["ingredients"]
+            )
+            steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
+            lines.append(
+                f"{dish['name']} — на {portions} {plural_portions(portions)} "
+                f"({', '.join(people)}). Ингредиенты: {scaled_ingredients}. "
+                f"Приготовление: {steps} Подача: {dish['serving_note']}"
+            )
+        meal_sections.append("\n\n".join(lines))
 
-    plan_summary = "\n\n".join(person_lines)
+    notes_lines = [f"{r['name']}: {r['notes']}" for r in responses.values() if r.get("notes")]
+    if notes_lines:
+        meal_sections.append("Комментарии по людям:\n" + "\n".join(notes_lines))
+
+    plan_summary = "\n\n---\n\n".join(meal_sections)
 
     needed = aggregate_ingredients(responses)
     shopping_list, updated_inventory = apply_inventory(needed)
@@ -288,15 +313,19 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     save_json(LAST_SHOPPING_LIST_FILE, shopping_list)
 
     prompt = (
-        "Ты помогаешь повару приготовить еду для семьи. Все блюда без глютена — "
-        "это уже учтено в рецептах ниже, не меняй ингредиенты и их количество.\n\n"
-        f"Вот план на завтра, посчитанный по каждому человеку:\n{plan_summary}\n\n"
-        "Отформатируй это в чистое, удобное для повара сообщение: отдельный блок "
-        "на каждого человека с их блюдами, ингредиентами и шагами приготовления. "
-        "Если у человека есть комментарий (аллергия, нелюбимый продукт и т.д.) — "
-        "адаптируй рецепт под него (замени или убери нужный ингредиент) и явно "
-        "укажи, что было изменено и почему. Не меняй количества и ингредиенты "
-        "там, где комментариев нет."
+        "Ты помогаешь повару приготовить еду для семьи на 7 человек. Все блюда "
+        "без глютена — это уже учтено в рецептах ниже, не меняй ингредиенты и "
+        "их количество (они уже пересчитаны на нужное число порций).\n\n"
+        f"Вот план на завтра, сгруппированный по блюду, а не по человеку — "
+        f"чтобы повар мог готовить сразу партиями:\n{plan_summary}\n\n"
+        "Отформатируй это в чистое, удобное для повара сообщение: отдельный "
+        "блок на каждое блюдо с указанием, для кого оно и на сколько порций, "
+        "ингредиентами (уже пересчитанными на нужное число порций) и шагами "
+        "приготовления. Если в разделе «Комментарии по людям» есть аллергия "
+        "или пожелание, которое касается конкретного человека внутри общей "
+        "партии — явно укажи в этом блоке, что одну порцию нужно отделить и "
+        "видоизменить, и как именно. Не меняй количества и ингредиенты там, "
+        "где комментариев нет."
     )
 
     message = client.messages.create(
@@ -323,31 +352,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=COOK_CHAT_ID, text=shopping_text)
 
 
-class _HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-    def log_message(self, *args):
-        pass  # keep Render's request logs quiet
-
-
-def start_health_server():
-    """Bind to Render's assigned PORT so it treats this Web Service as up.
-
-    Render's free tier only stays awake with regular inbound HTTP traffic —
-    an external pinger (e.g. UptimeRobot) hitting this endpoint every few
-    minutes keeps the process (and the evening job_queue) alive.
-    """
-    port = int(os.environ.get("PORT", "10000"))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    logger.info("Health check server слушает порт %s", port)
-
-
 def main():
-    start_health_server()
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
