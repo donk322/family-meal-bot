@@ -87,7 +87,7 @@ def save_today_responses(responses):
 
 def menu_keyboard():
     return ReplyKeyboardMarkup.from_button(
-        KeyboardButton(text="Выбрать меню на завтра", web_app=WebAppInfo(url=MINI_APP_URL))
+        KeyboardButton(text="🍽 Выбрать меню на завтра", web_app=WebAppInfo(url=MINI_APP_URL))
     )
 
 
@@ -173,14 +173,23 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     data = json.loads(update.effective_message.web_app_data.data)
 
-    breakfast_ids = [d for d in (data.get("breakfast") or []) if d in DISHES]
-    dinner_ids = [d for d in (data.get("dinner") or []) if d in DISHES]
+    def parse_picks(raw):
+        # Each item is {"id": dish_id, "egg": "...", "meat": "..."} — egg/meat optional
+        picks = []
+        for item in raw or []:
+            dish_id = item.get("id")
+            if dish_id in DISHES:
+                picks.append(item)
+        return picks
+
+    breakfast_picks = parse_picks(data.get("breakfast"))
+    dinner_picks = parse_picks(data.get("dinner"))
 
     responses = load_today_responses()
     responses[str(user.id)] = {
         "name": user.first_name,
-        "breakfast": breakfast_ids,
-        "dinner": dinner_ids,
+        "breakfast": breakfast_picks,
+        "dinner": dinner_picks,
         "notes": data.get("notes", ""),
     }
     save_today_responses(responses)
@@ -208,7 +217,8 @@ def aggregate_ingredients(responses):
     needed = {}
     for r in responses.values():
         chosen_dishes = list(r.get("breakfast", [])) + list(r.get("dinner", []))
-        for dish_id in chosen_dishes:
+        for pick in chosen_dishes:
+            dish_id = pick.get("id")
             if not dish_id or dish_id not in DISHES:
                 continue
             for ing in DISHES[dish_id]["ingredients"]:
@@ -252,18 +262,24 @@ def plural_portions(n):
 
 
 def build_dish_groups(responses):
-    """Group selections by (meal_label, dish_id) -> list of person names.
+    """Group selections by (meal_label, dish_id) -> list of {name, egg, meat}.
 
     This lets the cook batch-cook one dish for several people at once
-    instead of repeating the same recipe person by person.
+    instead of repeating the same recipe person by person, while still
+    keeping track of who wants their egg or meat done differently.
     """
     groups = {"завтрак": {}, "ужин": {}}
     for r in responses.values():
-        for meal_label, dish_ids in (("завтрак", r.get("breakfast", [])), ("ужин", r.get("dinner", []))):
-            for dish_id in dish_ids:
+        for meal_label, picks in (("завтрак", r.get("breakfast", [])), ("ужин", r.get("dinner", []))):
+            for pick in picks:
+                dish_id = pick.get("id")
                 if dish_id not in DISHES:
                     continue
-                groups[meal_label].setdefault(dish_id, []).append(r["name"])
+                groups[meal_label].setdefault(dish_id, []).append({
+                    "name": r["name"],
+                    "egg": pick.get("egg"),
+                    "meat": pick.get("meat"),
+                })
     return groups
 
 
@@ -294,9 +310,19 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
                 for ing in dish["ingredients"]
             )
             steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
+
+            name_labels = []
+            for p in people:
+                extras = []
+                if p.get("egg"):
+                    extras.append(f"яйцо: {p['egg']}")
+                if p.get("meat"):
+                    extras.append(f"мясо: {p['meat']}")
+                name_labels.append(f"{p['name']} ({', '.join(extras)})" if extras else p["name"])
+
             lines.append(
                 f"{dish['name']} — на {portions} {plural_portions(portions)} "
-                f"({', '.join(people)}). Ингредиенты: {scaled_ingredients}. "
+                f"({', '.join(name_labels)}). Ингредиенты: {scaled_ingredients}. "
                 f"Приготовление: {steps} Подача: {dish['serving_note']}"
             )
         meal_sections.append("\n\n".join(lines))
@@ -321,7 +347,12 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         "Отформатируй это в чистое, удобное для повара сообщение: отдельный "
         "блок на каждое блюдо с указанием, для кого оно и на сколько порций, "
         "ингредиентами (уже пересчитанными на нужное число порций) и шагами "
-        "приготовления. Если в разделе «Комментарии по людям» есть аллергия "
+        "приготовления. Рядом с именами некоторых людей в скобках указано, "
+        "как приготовить их яйцо или мясо (например «Аня (яйцо: жидкий "
+        "желток)») — обязательно вынеси это отдельной пометкой внутри блока "
+        "блюда, чтобы повар знал, что в общей партии часть порций нужно снять "
+        "с огня раньше или позже остальных, и явно укажи, кому какая степень "
+        "готовности нужна. Если в разделе «Комментарии по людям» есть аллергия "
         "или пожелание, которое касается конкретного человека внутри общей "
         "партии — явно укажи в этом блоке, что одну порцию нужно отделить и "
         "видоизменить, и как именно. Не меняй количества и ингредиенты там, "

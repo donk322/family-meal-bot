@@ -4,30 +4,77 @@
     "meal_type": "breakfast",
     "description": "Самый простой и любимый завтрак — яйца и хрустящий бекон",
     "ingredients": [
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 2},
-      {"name": "бекон", "unit": "г", "amount_per_serving": 60},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 5},
-      {"name": "соль", "unit": "г", "amount_per_serving": 2}
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "бекон",
+        "unit": "г",
+        "amount_per_serving": 60
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 2
+      }
     ],
     "recipe_steps": [
       "Обжарьте бекон на сухой сковороде до хрустящей корочки, отложите на бумажное полотенце",
       "На оставшемся жире (или добавив немного масла) пожарьте яйца по вкусу",
       "Посолите и подавайте сразу"
     ],
-    "serving_note": "Самый простой вариант в меню — ничего дополнительного, естественно без глютена"
+    "serving_note": "Самый простой вариант в меню — ничего дополнительного, естественно без глютена",
+    "customize": [
+      "egg"
+    ]
   },
   "breakfast_english": {
     "name": "Английский завтрак",
     "meal_type": "breakfast",
     "description": "Яйца, бекон, колбаски и помидор — всё на одной тарелке",
     "ingredients": [
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 2},
-      {"name": "бекон", "unit": "г", "amount_per_serving": 60},
-      {"name": "колбаски", "unit": "г", "amount_per_serving": 100},
-      {"name": "помидор", "unit": "г", "amount_per_serving": 80},
-      {"name": "шампиньоны", "unit": "г", "amount_per_serving": 60},
-      {"name": "фасоль в томате", "unit": "г", "amount_per_serving": 100},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 10}
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "бекон",
+        "unit": "г",
+        "amount_per_serving": 60
+      },
+      {
+        "name": "колбаски",
+        "unit": "г",
+        "amount_per_serving": 100
+      },
+      {
+        "name": "помидор",
+        "unit": "г",
+        "amount_per_serving": 80
+      },
+      {
+        "name": "шампиньоны",
+        "unit": "г",
+        "amount_per_serving": 60
+      },
+      {
+        "name": "фасоль в томате",
+        "unit": "г",
+        "amount_per_serving": 100
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 10
+      }
     ],
     "recipe_steps": [
       "Обжарьте колбаски на среднем огне до готовности, отложите",
@@ -36,20 +83,51 @@
       "Пожарьте яйца по вкусу (глазунья или болтунья), разогрейте фасоль в томате отдельно",
       "Выложите всё на одну тарелку"
     ],
-    "serving_note": "Проверяйте состав колбасок на упаковке в магазине — наполнители иногда на основе пшеничной муки. Фасоль в томате обычно без глютена, но состав тоже стоит глянуть"
+    "serving_note": "Проверяйте состав колбасок на упаковке в магазине — наполнители иногда на основе пшеничной муки. Фасоль в томате обычно без глютена, но состав тоже стоит глянуть",
+    "customize": [
+      "egg"
+    ]
   },
   "breakfast_eggs_benedict": {
     "name": "Яйца Бенедикт",
     "meal_type": "breakfast",
     "description": "Пашот и голландский соус на вашем безглютеновом тосте с ветчиной",
     "ingredients": [
-      {"name": "безглютеновый хлеб", "unit": "шт", "amount_per_serving": 2},
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 4},
-      {"name": "ветчина", "unit": "г", "amount_per_serving": 60},
-      {"name": "сливочное масло", "unit": "г", "amount_per_serving": 60},
-      {"name": "лимонный сок", "unit": "мл", "amount_per_serving": 10},
-      {"name": "уксус", "unit": "мл", "amount_per_serving": 5},
-      {"name": "соль", "unit": "г", "amount_per_serving": 2}
+      {
+        "name": "безглютеновый хлеб",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 4
+      },
+      {
+        "name": "ветчина",
+        "unit": "г",
+        "amount_per_serving": 60
+      },
+      {
+        "name": "сливочное масло",
+        "unit": "г",
+        "amount_per_serving": 60
+      },
+      {
+        "name": "лимонный сок",
+        "unit": "мл",
+        "amount_per_serving": 10
+      },
+      {
+        "name": "уксус",
+        "unit": "мл",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 2
+      }
     ],
     "recipe_steps": [
       "Растопите сливочное масло. Отделите 2 желтка, взбейте с лимонным соком на водяной бане, тонкой струйкой влейте тёплое масло, взбивая до загустения — это голландский соус",
@@ -57,18 +135,41 @@
       "Обжарьте ветчину до лёгкой золотистости, подогрейте тосты из безглютенового хлеба",
       "Соберите: тост, ветчина, яйцо пашот, сверху голландский соус"
     ],
-    "serving_note": "Единственный «заменитель» в меню — ваш обычный безглютеновый хлеб, уже проверенный и любимый"
+    "serving_note": "Единственный «заменитель» в меню — ваш обычный безглютеновый хлеб, уже проверенный и любимый",
+    "customize": [
+      "egg"
+    ]
   },
   "breakfast_ham_cheese_omelette": {
     "name": "Омлет с ветчиной и сыром",
     "meal_type": "breakfast",
     "description": "Классический сытный омлет с ветчиной и расплавленным сыром",
     "ingredients": [
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 3},
-      {"name": "ветчина", "unit": "г", "amount_per_serving": 50},
-      {"name": "сыр твёрдый", "unit": "г", "amount_per_serving": 30},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 10},
-      {"name": "соль", "unit": "г", "amount_per_serving": 2}
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 3
+      },
+      {
+        "name": "ветчина",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "сыр твёрдый",
+        "unit": "г",
+        "amount_per_serving": 30
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 10
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 2
+      }
     ],
     "recipe_steps": [
       "Взбейте яйца с солью",
@@ -83,12 +184,36 @@
     "meal_type": "breakfast",
     "description": "Сочный стейк и два яйца с жидким желтком",
     "ingredients": [
-      {"name": "говяжий стейк", "unit": "г", "amount_per_serving": 200},
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 2},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 15},
-      {"name": "соль", "unit": "г", "amount_per_serving": 3},
-      {"name": "чёрный перец", "unit": "г", "amount_per_serving": 1},
-      {"name": "свежая зелень", "unit": "г", "amount_per_serving": 5}
+      {
+        "name": "говяжий стейк",
+        "unit": "г",
+        "amount_per_serving": 200
+      },
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 3
+      },
+      {
+        "name": "чёрный перец",
+        "unit": "г",
+        "amount_per_serving": 1
+      },
+      {
+        "name": "свежая зелень",
+        "unit": "г",
+        "amount_per_serving": 5
+      }
     ],
     "recipe_steps": [
       "Достаньте стейк из холодильника заранее, чтобы он согрелся до комнатной температуры",
@@ -97,21 +222,57 @@
       "Дайте стейку отдохнуть 5 минут под фольгой",
       "На той же сковороде пожарьте яйца-глазунью"
     ],
-    "serving_note": "Подавать стейк целым куском рядом с яичницей, посыпать свежей зеленью"
+    "serving_note": "Подавать стейк целым куском рядом с яичницей, посыпать свежей зеленью",
+    "customize": [
+      "egg",
+      "meat"
+    ]
   },
   "breakfast_shakshuka": {
     "name": "Шакшука",
     "meal_type": "breakfast",
     "description": "Яйца, запечённые в пряном томатном соусе с перцем",
     "ingredients": [
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 2},
-      {"name": "помидоры", "unit": "г", "amount_per_serving": 150},
-      {"name": "болгарский перец", "unit": "г", "amount_per_serving": 50},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 30},
-      {"name": "чеснок", "unit": "г", "amount_per_serving": 5},
-      {"name": "паприка", "unit": "г", "amount_per_serving": 2},
-      {"name": "зира", "unit": "г", "amount_per_serving": 1},
-      {"name": "оливковое масло", "unit": "мл", "amount_per_serving": 10}
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "помидоры",
+        "unit": "г",
+        "amount_per_serving": 150
+      },
+      {
+        "name": "болгарский перец",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 30
+      },
+      {
+        "name": "чеснок",
+        "unit": "г",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "паприка",
+        "unit": "г",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "зира",
+        "unit": "г",
+        "amount_per_serving": 1
+      },
+      {
+        "name": "оливковое масло",
+        "unit": "мл",
+        "amount_per_serving": 10
+      }
     ],
     "recipe_steps": [
       "Обжарьте мелко нарезанный лук, перец и чеснок на оливковом масле 5 минут",
@@ -126,12 +287,36 @@
     "meal_type": "breakfast",
     "description": "Запечённый омлет с картофелем, беконом и сыром",
     "ingredients": [
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 2},
-      {"name": "картофель", "unit": "г", "amount_per_serving": 100},
-      {"name": "бекон", "unit": "г", "amount_per_serving": 40},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 20},
-      {"name": "сыр твёрдый", "unit": "г", "amount_per_serving": 30},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 10}
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "картофель",
+        "unit": "г",
+        "amount_per_serving": 100
+      },
+      {
+        "name": "бекон",
+        "unit": "г",
+        "amount_per_serving": 40
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 20
+      },
+      {
+        "name": "сыр твёрдый",
+        "unit": "г",
+        "amount_per_serving": 30
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 10
+      }
     ],
     "recipe_steps": [
       "Нарежьте картофель тонкими ломтиками, отварите до полуготовности 5 минут",
@@ -146,13 +331,41 @@
     "meal_type": "breakfast",
     "description": "Нежный скрэмбл и слабосолёный лосось на безглютеновом тосте",
     "ingredients": [
-      {"name": "безглютеновый хлеб", "unit": "шт", "amount_per_serving": 2},
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 3},
-      {"name": "слабосолёный лосось", "unit": "г", "amount_per_serving": 60},
-      {"name": "сливочное масло", "unit": "г", "amount_per_serving": 15},
-      {"name": "сливки", "unit": "мл", "amount_per_serving": 20},
-      {"name": "укроп", "unit": "г", "amount_per_serving": 3},
-      {"name": "соль", "unit": "г", "amount_per_serving": 1}
+      {
+        "name": "безглютеновый хлеб",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 3
+      },
+      {
+        "name": "слабосолёный лосось",
+        "unit": "г",
+        "amount_per_serving": 60
+      },
+      {
+        "name": "сливочное масло",
+        "unit": "г",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "сливки",
+        "unit": "мл",
+        "amount_per_serving": 20
+      },
+      {
+        "name": "укроп",
+        "unit": "г",
+        "amount_per_serving": 3
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 1
+      }
     ],
     "recipe_steps": [
       "Взбейте яйца со сливками и щепоткой соли",
@@ -167,13 +380,41 @@
     "meal_type": "breakfast",
     "description": "Тост с авокадо и яйцом пашот на вашем безглютеновом хлебе",
     "ingredients": [
-      {"name": "безглютеновый хлеб", "unit": "шт", "amount_per_serving": 2},
-      {"name": "авокадо", "unit": "г", "amount_per_serving": 80},
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 2},
-      {"name": "лимонный сок", "unit": "мл", "amount_per_serving": 5},
-      {"name": "уксус", "unit": "мл", "amount_per_serving": 5},
-      {"name": "соль", "unit": "г", "amount_per_serving": 2},
-      {"name": "чили хлопья", "unit": "г", "amount_per_serving": 1}
+      {
+        "name": "безглютеновый хлеб",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "авокадо",
+        "unit": "г",
+        "amount_per_serving": 80
+      },
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "лимонный сок",
+        "unit": "мл",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "уксус",
+        "unit": "мл",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "чили хлопья",
+        "unit": "г",
+        "amount_per_serving": 1
+      }
     ],
     "recipe_steps": [
       "Разомните авокадо вилкой с лимонным соком и солью",
@@ -181,20 +422,51 @@
       "Подрумяньте тосты из безглютенового хлеба",
       "Намажьте тосты авокадо, сверху выложите яйцо пашот и посыпьте чили"
     ],
-    "serving_note": "Готовится на вашем безглютеновом хлебе"
+    "serving_note": "Готовится на вашем безглютеновом хлебе",
+    "customize": [
+      "egg"
+    ]
   },
   "breakfast_beef_hash_egg": {
     "name": "Хэш с говядиной и яйцом",
     "meal_type": "breakfast",
     "description": "Обжаренный картофель с говядиной и яйцом сверху",
     "ingredients": [
-      {"name": "картофель", "unit": "г", "amount_per_serving": 200},
-      {"name": "говядина отварная", "unit": "г", "amount_per_serving": 120},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 40},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 15},
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 1},
-      {"name": "соль", "unit": "г", "amount_per_serving": 3},
-      {"name": "паприка", "unit": "г", "amount_per_serving": 2}
+      {
+        "name": "картофель",
+        "unit": "г",
+        "amount_per_serving": 200
+      },
+      {
+        "name": "говядина отварная",
+        "unit": "г",
+        "amount_per_serving": 120
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 40
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 1
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 3
+      },
+      {
+        "name": "паприка",
+        "unit": "г",
+        "amount_per_serving": 2
+      }
     ],
     "recipe_steps": [
       "Нарежьте картофель мелким кубиком, отварите 5 минут до полуготовности",
@@ -203,20 +475,51 @@
       "Добавьте нарезанную кубиками говядину и паприку, обжарьте ещё 5 минут",
       "Сделайте углубление и разбейте туда яйцо, готовьте под крышкой до готовности желаемой степени"
     ],
-    "serving_note": "Подавать сразу со сковороды, желток должен слегка растекаться"
+    "serving_note": "Подавать сразу со сковороды, желток должен слегка растекаться",
+    "customize": [
+      "egg"
+    ]
   },
   "dinner_grilled_chicken_veg": {
     "name": "Курица с овощами на гриле",
     "meal_type": "dinner",
     "description": "Куриное филе на гриле с цукини и болгарским перцем",
     "ingredients": [
-      {"name": "куриное филе", "unit": "г", "amount_per_serving": 150},
-      {"name": "цукини", "unit": "г", "amount_per_serving": 100},
-      {"name": "болгарский перец", "unit": "г", "amount_per_serving": 80},
-      {"name": "оливковое масло", "unit": "мл", "amount_per_serving": 15},
-      {"name": "чеснок", "unit": "г", "amount_per_serving": 5},
-      {"name": "розмарин", "unit": "г", "amount_per_serving": 1},
-      {"name": "соль", "unit": "г", "amount_per_serving": 3}
+      {
+        "name": "куриное филе",
+        "unit": "г",
+        "amount_per_serving": 150
+      },
+      {
+        "name": "цукини",
+        "unit": "г",
+        "amount_per_serving": 100
+      },
+      {
+        "name": "болгарский перец",
+        "unit": "г",
+        "amount_per_serving": 80
+      },
+      {
+        "name": "оливковое масло",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "чеснок",
+        "unit": "г",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "розмарин",
+        "unit": "г",
+        "amount_per_serving": 1
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 3
+      }
     ],
     "recipe_steps": [
       "Замаринуйте филе в масле, измельчённом чесноке, розмарине и соли на 20 минут",
@@ -231,14 +534,46 @@
     "meal_type": "dinner",
     "description": "Говядина в сливочном соусе с грибами, подаётся с рисом",
     "ingredients": [
-      {"name": "говядина", "unit": "г", "amount_per_serving": 180},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 50},
-      {"name": "шампиньоны", "unit": "г", "amount_per_serving": 80},
-      {"name": "сметана", "unit": "мл", "amount_per_serving": 100},
-      {"name": "горчица", "unit": "г", "amount_per_serving": 5},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 15},
-      {"name": "рис", "unit": "г", "amount_per_serving": 80},
-      {"name": "соль", "unit": "г", "amount_per_serving": 3}
+      {
+        "name": "говядина",
+        "unit": "г",
+        "amount_per_serving": 180
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "шампиньоны",
+        "unit": "г",
+        "amount_per_serving": 80
+      },
+      {
+        "name": "сметана",
+        "unit": "мл",
+        "amount_per_serving": 100
+      },
+      {
+        "name": "горчица",
+        "unit": "г",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "рис",
+        "unit": "г",
+        "amount_per_serving": 80
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 3
+      }
     ],
     "recipe_steps": [
       "Нарежьте говядину тонкими полосками, быстро обжарьте на сильном огне до румяности, отложите",
@@ -246,19 +581,46 @@
       "Добавьте сметану и горчицу, перемешайте, верните говядину, прогрейте 3-4 минуты",
       "Отдельно отварите рис в подсоленной воде до готовности"
     ],
-    "serving_note": "Соус загущается сметаной, а не мукой — если хочется погуще, можно добавить щепотку кукурузного крахмала вместо муки"
+    "serving_note": "Соус загущается сметаной, а не мукой — если хочется погуще, можно добавить щепотку кукурузного крахмала вместо муки",
+    "customize": [
+      "meat"
+    ]
   },
   "dinner_baked_salmon_potato": {
     "name": "Лосось запечённый с картофелем",
     "meal_type": "dinner",
     "description": "Филе лосося с картофелем, лимоном и укропом",
     "ingredients": [
-      {"name": "филе лосося", "unit": "г", "amount_per_serving": 150},
-      {"name": "картофель", "unit": "г", "amount_per_serving": 200},
-      {"name": "лимон", "unit": "г", "amount_per_serving": 30},
-      {"name": "укроп", "unit": "г", "amount_per_serving": 5},
-      {"name": "оливковое масло", "unit": "мл", "amount_per_serving": 15},
-      {"name": "соль", "unit": "г", "amount_per_serving": 3}
+      {
+        "name": "филе лосося",
+        "unit": "г",
+        "amount_per_serving": 150
+      },
+      {
+        "name": "картофель",
+        "unit": "г",
+        "amount_per_serving": 200
+      },
+      {
+        "name": "лимон",
+        "unit": "г",
+        "amount_per_serving": 30
+      },
+      {
+        "name": "укроп",
+        "unit": "г",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "оливковое масло",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 3
+      }
     ],
     "recipe_steps": [
       "Разогрейте духовку до 200°C",
@@ -273,13 +635,41 @@
     "meal_type": "dinner",
     "description": "Кремовое ризотто на рисе арборио с шампиньонами",
     "ingredients": [
-      {"name": "рис арборио", "unit": "г", "amount_per_serving": 80},
-      {"name": "шампиньоны", "unit": "г", "amount_per_serving": 100},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 30},
-      {"name": "чеснок", "unit": "г", "amount_per_serving": 5},
-      {"name": "овощной бульон", "unit": "мл", "amount_per_serving": 400},
-      {"name": "пармезан", "unit": "г", "amount_per_serving": 20},
-      {"name": "сливочное масло", "unit": "г", "amount_per_serving": 15}
+      {
+        "name": "рис арборио",
+        "unit": "г",
+        "amount_per_serving": 80
+      },
+      {
+        "name": "шампиньоны",
+        "unit": "г",
+        "amount_per_serving": 100
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 30
+      },
+      {
+        "name": "чеснок",
+        "unit": "г",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "овощной бульон",
+        "unit": "мл",
+        "amount_per_serving": 400
+      },
+      {
+        "name": "пармезан",
+        "unit": "г",
+        "amount_per_serving": 20
+      },
+      {
+        "name": "сливочное масло",
+        "unit": "г",
+        "amount_per_serving": 15
+      }
     ],
     "recipe_steps": [
       "Обжарьте лук, чеснок и нарезанные грибы на сливочном масле до мягкости",
@@ -294,13 +684,41 @@
     "meal_type": "dinner",
     "description": "Хрустящие кукурузные тако-шеллы с говяжьим фаршем, авокадо и специями",
     "ingredients": [
-      {"name": "кукурузные тако-шеллы", "unit": "шт", "amount_per_serving": 3},
-      {"name": "говяжий фарш", "unit": "г", "amount_per_serving": 120},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 30},
-      {"name": "помидор", "unit": "г", "amount_per_serving": 50},
-      {"name": "авокадо", "unit": "г", "amount_per_serving": 50},
-      {"name": "лайм", "unit": "г", "amount_per_serving": 15},
-      {"name": "специи для тако", "unit": "г", "amount_per_serving": 5}
+      {
+        "name": "кукурузные тако-шеллы",
+        "unit": "шт",
+        "amount_per_serving": 3
+      },
+      {
+        "name": "говяжий фарш",
+        "unit": "г",
+        "amount_per_serving": 120
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 30
+      },
+      {
+        "name": "помидор",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "авокадо",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "лайм",
+        "unit": "г",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "специи для тако",
+        "unit": "г",
+        "amount_per_serving": 5
+      }
     ],
     "recipe_steps": [
       "Обжарьте лук до прозрачности, добавьте фарш и специи для тако",
@@ -315,16 +733,56 @@
     "meal_type": "dinner",
     "description": "Куриные шашлычки на гриле с соусом дзадзики и рисом",
     "ingredients": [
-      {"name": "куриное филе", "unit": "г", "amount_per_serving": 180},
-      {"name": "йогурт натуральный", "unit": "г", "amount_per_serving": 50},
-      {"name": "чеснок", "unit": "г", "amount_per_serving": 8},
-      {"name": "лимонный сок", "unit": "мл", "amount_per_serving": 15},
-      {"name": "оливковое масло", "unit": "мл", "amount_per_serving": 15},
-      {"name": "орегано", "unit": "г", "amount_per_serving": 2},
-      {"name": "греческий йогурт", "unit": "г", "amount_per_serving": 100},
-      {"name": "огурец", "unit": "г", "amount_per_serving": 50},
-      {"name": "укроп", "unit": "г", "amount_per_serving": 3},
-      {"name": "рис", "unit": "г", "amount_per_serving": 80}
+      {
+        "name": "куриное филе",
+        "unit": "г",
+        "amount_per_serving": 180
+      },
+      {
+        "name": "йогурт натуральный",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "чеснок",
+        "unit": "г",
+        "amount_per_serving": 8
+      },
+      {
+        "name": "лимонный сок",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "оливковое масло",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "орегано",
+        "unit": "г",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "греческий йогурт",
+        "unit": "г",
+        "amount_per_serving": 100
+      },
+      {
+        "name": "огурец",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "укроп",
+        "unit": "г",
+        "amount_per_serving": 3
+      },
+      {
+        "name": "рис",
+        "unit": "г",
+        "amount_per_serving": 80
+      }
     ],
     "recipe_steps": [
       "Замаринуйте кубики куриного филе в йогурте, половине чеснока, лимонном соке, масле и орегано на 30 минут",
@@ -339,15 +797,51 @@
     "meal_type": "dinner",
     "description": "Говядина на гриле с аргентинским соусом чимичурри и картофелем",
     "ingredients": [
-      {"name": "говяжий стейк", "unit": "г", "amount_per_serving": 200},
-      {"name": "петрушка", "unit": "г", "amount_per_serving": 20},
-      {"name": "чеснок", "unit": "г", "amount_per_serving": 10},
-      {"name": "орегано", "unit": "г", "amount_per_serving": 2},
-      {"name": "оливковое масло", "unit": "мл", "amount_per_serving": 40},
-      {"name": "красный винный уксус", "unit": "мл", "amount_per_serving": 15},
-      {"name": "чили хлопья", "unit": "г", "amount_per_serving": 1},
-      {"name": "картофель", "unit": "г", "amount_per_serving": 200},
-      {"name": "соль", "unit": "г", "amount_per_serving": 3}
+      {
+        "name": "говяжий стейк",
+        "unit": "г",
+        "amount_per_serving": 200
+      },
+      {
+        "name": "петрушка",
+        "unit": "г",
+        "amount_per_serving": 20
+      },
+      {
+        "name": "чеснок",
+        "unit": "г",
+        "amount_per_serving": 10
+      },
+      {
+        "name": "орегано",
+        "unit": "г",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "оливковое масло",
+        "unit": "мл",
+        "amount_per_serving": 40
+      },
+      {
+        "name": "красный винный уксус",
+        "unit": "мл",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "чили хлопья",
+        "unit": "г",
+        "amount_per_serving": 1
+      },
+      {
+        "name": "картофель",
+        "unit": "г",
+        "amount_per_serving": 200
+      },
+      {
+        "name": "соль",
+        "unit": "г",
+        "amount_per_serving": 3
+      }
     ],
     "recipe_steps": [
       "Мелко нарежьте петрушку и чеснок, смешайте с маслом, уксусом, орегано и чили — это чимичурри, дайте настояться",
@@ -355,20 +849,51 @@
       "Дайте стейку отдохнуть 5 минут, затем нарежьте ломтиками",
       "Отварите или запеките картофель, подавайте вместе со стейком, полив чимичурри"
     ],
-    "serving_note": "Соус без каких-либо загустителей — полностью естественно без глютена"
+    "serving_note": "Соус без каких-либо загустителей — полностью естественно без глютена",
+    "customize": [
+      "meat"
+    ]
   },
   "dinner_chicken_plov": {
     "name": "Плов с курицей",
     "meal_type": "dinner",
     "description": "Ароматный плов с куриным бедром, морковью и специями",
     "ingredients": [
-      {"name": "рис длиннозёрный", "unit": "г", "amount_per_serving": 90},
-      {"name": "куриное бедро", "unit": "г", "amount_per_serving": 150},
-      {"name": "морковь", "unit": "г", "amount_per_serving": 60},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 40},
-      {"name": "чеснок", "unit": "г", "amount_per_serving": 5},
-      {"name": "зира", "unit": "г", "amount_per_serving": 2},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 15}
+      {
+        "name": "рис длиннозёрный",
+        "unit": "г",
+        "amount_per_serving": 90
+      },
+      {
+        "name": "куриное бедро",
+        "unit": "г",
+        "amount_per_serving": 150
+      },
+      {
+        "name": "морковь",
+        "unit": "г",
+        "amount_per_serving": 60
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 40
+      },
+      {
+        "name": "чеснок",
+        "unit": "г",
+        "amount_per_serving": 5
+      },
+      {
+        "name": "зира",
+        "unit": "г",
+        "amount_per_serving": 2
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 15
+      }
     ],
     "recipe_steps": [
       "Обжарьте куски куриного бедра до румяной корочки, отложите",
@@ -383,12 +908,36 @@
     "meal_type": "dinner",
     "description": "Мягкая тушёная говядина с рассыпчатой гречневой кашей",
     "ingredients": [
-      {"name": "говядина", "unit": "г", "amount_per_serving": 150},
-      {"name": "гречневая крупа", "unit": "г", "amount_per_serving": 70},
-      {"name": "морковь", "unit": "г", "amount_per_serving": 50},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 40},
-      {"name": "томатная паста", "unit": "г", "amount_per_serving": 20},
-      {"name": "растительное масло", "unit": "мл", "amount_per_serving": 10}
+      {
+        "name": "говядина",
+        "unit": "г",
+        "amount_per_serving": 150
+      },
+      {
+        "name": "гречневая крупа",
+        "unit": "г",
+        "amount_per_serving": 70
+      },
+      {
+        "name": "морковь",
+        "unit": "г",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 40
+      },
+      {
+        "name": "томатная паста",
+        "unit": "г",
+        "amount_per_serving": 20
+      },
+      {
+        "name": "растительное масло",
+        "unit": "мл",
+        "amount_per_serving": 10
+      }
     ],
     "recipe_steps": [
       "Нарежьте говядину кубиками, обжарьте до корочки на масле",
@@ -403,13 +952,41 @@
     "meal_type": "dinner",
     "description": "Нежные котлеты из белой рыбы с пюре из картофеля",
     "ingredients": [
-      {"name": "филе белой рыбы", "unit": "г", "amount_per_serving": 150},
-      {"name": "яйца", "unit": "шт", "amount_per_serving": 1},
-      {"name": "безглютеновый хлеб", "unit": "г", "amount_per_serving": 30},
-      {"name": "картофель", "unit": "г", "amount_per_serving": 200},
-      {"name": "молоко", "unit": "мл", "amount_per_serving": 50},
-      {"name": "сливочное масло", "unit": "г", "amount_per_serving": 15},
-      {"name": "лук репчатый", "unit": "г", "amount_per_serving": 20}
+      {
+        "name": "филе белой рыбы",
+        "unit": "г",
+        "amount_per_serving": 150
+      },
+      {
+        "name": "яйца",
+        "unit": "шт",
+        "amount_per_serving": 1
+      },
+      {
+        "name": "безглютеновый хлеб",
+        "unit": "г",
+        "amount_per_serving": 30
+      },
+      {
+        "name": "картофель",
+        "unit": "г",
+        "amount_per_serving": 200
+      },
+      {
+        "name": "молоко",
+        "unit": "мл",
+        "amount_per_serving": 50
+      },
+      {
+        "name": "сливочное масло",
+        "unit": "г",
+        "amount_per_serving": 15
+      },
+      {
+        "name": "лук репчатый",
+        "unit": "г",
+        "amount_per_serving": 20
+      }
     ],
     "recipe_steps": [
       "Измельчите безглютеновый хлеб в крошку (в блендере или тёркой) — это ваша панировка",
