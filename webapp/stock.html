@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Обновить запасы</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --accent: #3f6b4a;
+    --accent-soft: #eaf1ec;
+    --heading-font: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--tg-theme-bg-color, #ffffff);
+    color: var(--tg-theme-text-color, #1c1c1c);
+    padding: 28px 20px 100px;
+    line-height: 1.4;
+  }
+  .kicker {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin: 0 0 6px;
+  }
+  h1 {
+    font-family: var(--heading-font);
+    font-weight: 400;
+    font-size: 24px;
+    margin: 0 0 6px;
+  }
+  .sub {
+    color: var(--tg-theme-hint-color, #8a8a8a);
+    font-size: 14px;
+    margin: 0 0 18px;
+  }
+  #search {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
+    background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+    color: var(--tg-theme-text-color, #1c1c1c);
+    padding: 10px 14px;
+    font-size: 15px;
+    margin-bottom: 16px;
+  }
+  #search:focus { outline: none; border-color: var(--accent); }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--tg-theme-hint-color, #ececec);
+  }
+  .row-name {
+    font-size: 14px;
+  }
+  .row-unit {
+    color: var(--tg-theme-hint-color, #999);
+    font-size: 12px;
+  }
+  .row input {
+    width: 84px;
+    text-align: right;
+    border-radius: 8px;
+    border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
+    background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+    color: var(--tg-theme-text-color, #1c1c1c);
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+  .row input:focus { outline: none; border-color: var(--accent); }
+  .hint {
+    font-size: 12px;
+    color: var(--tg-theme-hint-color, #999);
+    margin-top: 16px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <p class="kicker">Запасы на кухне</p>
+  <h1>Что сейчас есть дома?</h1>
+  <p class="sub">Впиши, сколько чего есть после похода в магазин. Пустые поля не трогаем — только заполненные обновятся.</p>
+
+  <input type="text" id="search" placeholder="Поиск продукта...">
+  <div id="list"></div>
+  <p class="hint">Заполняй только то, что реально пересчитал — остальное останется как было</p>
+
+<script>
+  const INGREDIENTS = [
+    {"name": "авокадо", "unit": "г"}, {"name": "безглютеновый хлеб", "unit": "шт"},
+    {"name": "бекон", "unit": "г"}, {"name": "болгарский перец", "unit": "г"},
+    {"name": "ветчина", "unit": "г"}, {"name": "говядина", "unit": "г"},
+    {"name": "говядина отварная", "unit": "г"}, {"name": "говяжий стейк", "unit": "г"},
+    {"name": "говяжий фарш", "unit": "г"}, {"name": "горчица", "unit": "г"},
+    {"name": "греческий йогурт", "unit": "г"}, {"name": "гречневая крупа", "unit": "г"},
+    {"name": "зира", "unit": "г"}, {"name": "йогурт натуральный", "unit": "г"},
+    {"name": "картофель", "unit": "г"}, {"name": "колбаски", "unit": "г"},
+    {"name": "красный винный уксус", "unit": "мл"}, {"name": "кукурузные тако-шеллы", "unit": "шт"},
+    {"name": "куриное бедро", "unit": "г"}, {"name": "куриное филе", "unit": "г"},
+    {"name": "лайм", "unit": "г"}, {"name": "лимон", "unit": "г"},
+    {"name": "лимонный сок", "unit": "мл"}, {"name": "лук репчатый", "unit": "г"},
+    {"name": "молоко", "unit": "мл"}, {"name": "морковь", "unit": "г"},
+    {"name": "овощной бульон", "unit": "мл"}, {"name": "огурец", "unit": "г"},
+    {"name": "оливковое масло", "unit": "мл"}, {"name": "орегано", "unit": "г"},
+    {"name": "паприка", "unit": "г"}, {"name": "пармезан", "unit": "г"},
+    {"name": "петрушка", "unit": "г"}, {"name": "помидор", "unit": "г"},
+    {"name": "растительное масло", "unit": "мл"}, {"name": "рис", "unit": "г"},
+    {"name": "рис арборио", "unit": "г"}, {"name": "рис длиннозёрный", "unit": "г"},
+    {"name": "розмарин", "unit": "г"}, {"name": "свежая зелень", "unit": "г"},
+    {"name": "слабосолёный лосось", "unit": "г"}, {"name": "сливки", "unit": "мл"},
+    {"name": "сливочное масло", "unit": "г"}, {"name": "сметана", "unit": "мл"},
+    {"name": "соль", "unit": "г"}, {"name": "специи для тако", "unit": "г"},
+    {"name": "сыр твёрдый", "unit": "г"}, {"name": "томатная паста", "unit": "г"},
+    {"name": "укроп", "unit": "г"}, {"name": "уксус", "unit": "мл"},
+    {"name": "фасоль в томате", "unit": "г"}, {"name": "филе белой рыбы", "unit": "г"},
+    {"name": "филе лосося", "unit": "г"}, {"name": "цукини", "unit": "г"},
+    {"name": "чеснок", "unit": "г"}, {"name": "чили хлопья", "unit": "г"},
+    {"name": "чёрный перец", "unit": "г"}, {"name": "шампиньоны", "unit": "г"},
+    {"name": "яйца", "unit": "шт"}
+  ];
+
+  const tg = window.Telegram?.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  const list = document.getElementById('list');
+  const values = {};
+
+  function renderList(filter) {
+    list.innerHTML = '';
+    INGREDIENTS
+      .filter(i => !filter || i.name.toLowerCase().includes(filter.toLowerCase()))
+      .forEach(ing => {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `
+          <div>
+            <span class="row-name">${ing.name}</span>
+            <span class="row-unit"> (${ing.unit})</span>
+          </div>
+          <input type="number" min="0" step="any" inputmode="decimal"
+                 value="${values[ing.name] ?? ''}" data-name="${ing.name}" data-unit="${ing.unit}">
+        `;
+        const input = row.querySelector('input');
+        input.oninput = () => {
+          if (input.value === '') delete values[ing.name];
+          else values[ing.name] = parseFloat(input.value);
+        };
+        list.appendChild(row);
+      });
+  }
+
+  document.getElementById('search').oninput = (e) => renderList(e.target.value);
+  renderList('');
+
+  function submit() {
+    const unitByName = Object.fromEntries(INGREDIENTS.map(i => [i.name, i.unit]));
+    const stock = {};
+    for (const name in values) {
+      stock[name] = { amount: values[name], unit: unitByName[name] };
+    }
+    const payload = { type: 'stock', stock };
+    if (tg) {
+      tg.sendData(JSON.stringify(payload));
+    } else {
+      alert('Открой это внутри Telegram, чтобы отправить данные');
+    }
+  }
+
+  if (tg) {
+    tg.MainButton.setText('Сохранить остатки');
+    tg.MainButton.show();
+    tg.MainButton.onClick(submit);
+  }
+</script>
+</body>
+</html>

@@ -24,12 +24,22 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 MINI_APP_URL = os.environ["MINI_APP_URL"]
+STOCK_APP_URL = os.environ.get("STOCK_APP_URL", "")
 COOK_CHAT_ID = int(os.environ.get("COOK_CHAT_ID", "0") or 0)
 
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "20"))
 COMPILE_HOUR = int(os.environ.get("COMPILE_HOUR", "21"))
 COMPILE_MINUTE = int(os.environ.get("COMPILE_MINUTE", "30"))
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Africa/Johannesburg"))
+
+# Weekly shopping list — 0=Monday ... 6=Sunday
+WEEKLY_SHOPPING_DAY = int(os.environ.get("WEEKLY_SHOPPING_DAY", "6"))
+WEEKLY_SHOPPING_HOUR = int(os.environ.get("WEEKLY_SHOPPING_HOUR", "21"))
+WEEKLY_SHOPPING_MINUTE = int(os.environ.get("WEEKLY_SHOPPING_MINUTE", "35"))
+
+# Alert the cook right away if an ingredient has less than this many
+# typical servings left, instead of waiting for the weekly list.
+LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "2"))
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -38,11 +48,29 @@ DATA_DIR.mkdir(exist_ok=True)
 FAMILY_FILE = DATA_DIR / "family.json"
 INVENTORY_FILE = DATA_DIR / "inventory.json"
 LAST_SHOPPING_LIST_FILE = DATA_DIR / "last_shopping_list.json"
+WEEKLY_SHORTFALL_FILE = DATA_DIR / "weekly_shortfall.json"
 DISHES_FILE = BASE_DIR / "dishes.json"
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 DISHES = json.loads(DISHES_FILE.read_text())
+
+
+def build_ingredient_typical_usage():
+    """Average amount_per_serving for each ingredient across every dish that uses it.
+
+    Used to estimate "servings left" for a given stock level, so we can warn
+    the cook before something actually runs out.
+    """
+    totals, counts = {}, {}
+    for dish in DISHES.values():
+        for ing in dish["ingredients"]:
+            totals[ing["name"]] = totals.get(ing["name"], 0) + ing["amount_per_serving"]
+            counts[ing["name"]] = counts.get(ing["name"], 0) + 1
+    return {name: totals[name] / counts[name] for name in totals}
+
+
+INGREDIENT_TYPICAL_USAGE = build_ingredient_typical_usage()
 
 
 # ---------- storage helpers ----------
@@ -88,6 +116,12 @@ def save_today_responses(responses):
 def menu_keyboard():
     return ReplyKeyboardMarkup.from_button(
         KeyboardButton(text="🍽 Выбрать меню на завтра", web_app=WebAppInfo(url=MINI_APP_URL))
+    )
+
+
+def stock_keyboard():
+    return ReplyKeyboardMarkup.from_button(
+        KeyboardButton(text="📦 Обновить запасы", web_app=WebAppInfo(url=STOCK_APP_URL))
     )
 
 
@@ -150,6 +184,19 @@ async def addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Добавлено: {name} — теперь {inventory[name]['amount']} {unit}")
 
 
+async def updatestock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not STOCK_APP_URL:
+        await update.message.reply_text(
+            "STOCK_APP_URL не настроен — сначала задай эту переменную окружения."
+        )
+        return
+    await update.message.reply_text(
+        "Жми кнопку и впиши, сколько чего сейчас есть дома — заполняй только то, "
+        "что реально пересчитал, остальное не тронется.",
+        reply_markup=stock_keyboard(),
+    )
+
+
 async def restock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     shopping_list = load_json(LAST_SHOPPING_LIST_FILE, {})
     if not shopping_list:
@@ -172,6 +219,20 @@ async def restock(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     data = json.loads(update.effective_message.web_app_data.data)
+
+    if data.get("type") == "stock":
+        stock_update = data.get("stock", {})
+        if not stock_update:
+            await update.message.reply_text("Ничего не заполнено — запасы не изменены.")
+            return
+        inventory = load_inventory()
+        for name, item in stock_update.items():
+            inventory[name] = {"amount": item["amount"], "unit": item["unit"]}
+        save_inventory(inventory)
+        await update.message.reply_text(
+            f"Обновил {len(stock_update)} позиций в запасах. Спасибо!"
+        )
+        return
 
     def parse_picks(raw):
         # Each item is {"id": dish_id, "egg": "...", "meat": "..."} — egg/meat optional
@@ -283,6 +344,27 @@ def build_dish_groups(responses):
     return groups
 
 
+async def check_low_stock_and_alert(context: ContextTypes.DEFAULT_TYPE, inventory):
+    """Warn the cook right away if something is down to its last couple of servings."""
+    if not COOK_CHAT_ID:
+        return
+
+    low_items = []
+    for name, info in inventory.items():
+        typical = INGREDIENT_TYPICAL_USAGE.get(name)
+        if not typical or typical <= 0:
+            continue
+        servings_left = info["amount"] / typical
+        if servings_left < LOW_STOCK_SERVINGS:
+            low_items.append(
+                f"{name} — осталось на {round(servings_left, 1)} порц. ({info['amount']} {info['unit']})"
+            )
+
+    if low_items:
+        text = "⚠️ Скоро понадобится купить:\n" + "\n".join(low_items)
+        await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
+
+
 async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     if not COOK_CHAT_ID:
         logger.warning("COOK_CHAT_ID не задан — некому отправлять план")
@@ -336,7 +418,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     needed = aggregate_ingredients(responses)
     shopping_list, updated_inventory = apply_inventory(needed)
     save_inventory(updated_inventory)
-    save_json(LAST_SHOPPING_LIST_FILE, shopping_list)
+    await check_low_stock_and_alert(context, updated_inventory)
 
     prompt = (
         "Ты помогаешь повару приготовить еду для семьи на 7 человек. Все блюда "
@@ -372,15 +454,42 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     for chunk in chunks:
         await context.bot.send_message(chat_id=COOK_CHAT_ID, text=chunk)
 
+    # Don't send today's shortfall as its own message — fold it into the
+    # running weekly total instead, sent once a week (see send_weekly_shopping_list).
     if shopping_list:
-        lines = [f"{name}: {item['amount']} {item['unit']}" for name, item in shopping_list.items()]
-        shopping_text = "Список покупок на завтра:\n" + "\n".join(lines) + (
-            "\n\nКогда купите — отправьте боту команду /restock, чтобы обновить запасы."
-        )
-    else:
-        shopping_text = "Всё нужное уже есть в запасах — докупать ничего не нужно."
+        weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
+        for name, item in shopping_list.items():
+            if name in weekly:
+                weekly[name]["amount"] = round(weekly[name]["amount"] + item["amount"], 1)
+                weekly[name]["unit"] = item["unit"]
+            else:
+                weekly[name] = {"amount": item["amount"], "unit": item["unit"]}
+        save_json(WEEKLY_SHORTFALL_FILE, weekly)
 
-    await context.bot.send_message(chat_id=COOK_CHAT_ID, text=shopping_text)
+
+async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
+    if not COOK_CHAT_ID:
+        logger.warning("COOK_CHAT_ID не задан — некому отправлять список покупок")
+        return
+
+    weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
+    if not weekly:
+        await context.bot.send_message(
+            chat_id=COOK_CHAT_ID,
+            text="Список покупок на неделю: всё нужное уже было в запасах, докупать нечего.",
+        )
+        return
+
+    lines = [f"{name}: {item['amount']} {item['unit']}" for name, item in weekly.items()]
+    text = (
+        "Список покупок на неделю:\n" + "\n".join(lines) +
+        "\n\nКогда купите — отправьте боту команду /restock, чтобы обновить запасы."
+    )
+    await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
+
+    # /restock adds back whatever was in the last sent list — now that's this weekly one
+    save_json(LAST_SHOPPING_LIST_FILE, weekly)
+    save_json(WEEKLY_SHORTFALL_FILE, {})
 
 
 def main():
@@ -390,6 +499,7 @@ def main():
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("stock", stock))
     app.add_handler(CommandHandler("addstock", addstock))
+    app.add_handler(CommandHandler("updatestock", updatestock_cmd))
     app.add_handler(CommandHandler("restock", restock))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
@@ -400,6 +510,11 @@ def main():
     job_queue.run_daily(
         compile_and_send_to_cook,
         time=dtime(hour=COMPILE_HOUR, minute=COMPILE_MINUTE, tzinfo=TIMEZONE),
+    )
+    job_queue.run_daily(
+        send_weekly_shopping_list,
+        time=dtime(hour=WEEKLY_SHOPPING_HOUR, minute=WEEKLY_SHOPPING_MINUTE, tzinfo=TIMEZONE),
+        days=(WEEKLY_SHOPPING_DAY,),
     )
 
     logger.info("Бот запущен")
