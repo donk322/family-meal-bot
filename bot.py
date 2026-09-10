@@ -1,7 +1,9 @@
 import os
 import json
 import logging
+import threading
 from datetime import time as dtime, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -492,7 +494,31 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
     save_json(WEEKLY_SHORTFALL_FILE, {})
 
 
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *args):
+        pass  # keep Render's request logs quiet
+
+
+def start_health_server():
+    """Bind to Render's assigned PORT so it treats this Web Service as up.
+
+    Render's free tier only stays awake with regular inbound HTTP traffic —
+    an external pinger (e.g. UptimeRobot) hitting this endpoint every few
+    minutes keeps the process (and the evening job_queue) alive.
+    """
+    port = int(os.environ.get("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    logger.info("Health check server слушает порт %s", port)
+
+
 def main():
+    start_health_server()
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
