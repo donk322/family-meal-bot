@@ -12,6 +12,8 @@ services:
         sync: false
       - key: MINI_APP_URL
         sync: false
+      - key: STOCK_APP_URL
+        sync: false
       - key: COOK_CHAT_ID
         sync: false
       - key: REMINDER_HOUR
