@@ -215,13 +215,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     family[str(user.id)] = {"name": user.first_name}
     save_family(family)
 
-    await update.message.reply_text(
+    greeting = (
         f"Привет, {user.first_name}! Записал тебя в список.\n\n"
-        f"Каждый вечер в {REMINDER_HOUR}:00 буду присылать кнопку с меню, чтобы "
-        "выбрать, что хочешь на завтрак и ужин. Можешь нажать её и сейчас, "
-        "чтобы попробовать.",
-        reply_markup=menu_keyboard(),
+        f"Каждый вечер в {REMINDER_HOUR:02d}:{REMINDER_MINUTE:02d} буду присылать кнопку с меню, "
+        "чтобы выбрать, что хочешь на завтрак и ужин. Можешь нажать её и "
+        "сейчас, чтобы попробовать."
     )
+
+    is_family_head = (
+        FAMILY_HEAD_USERNAME
+        and (user.username or "").lower() == FAMILY_HEAD_USERNAME
+    )
+    if is_family_head:
+        greeting += (
+            "\n\n👑 Как глава семьи, твой голос считается за двоих при "
+            "определении победившего блюда в каждой категории."
+        )
+
+    await update.message.reply_text(greeting, reply_markup=menu_keyboard())
 
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
