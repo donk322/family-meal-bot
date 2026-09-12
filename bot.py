@@ -31,6 +31,9 @@ STOCK_APP_URL = os.environ.get("STOCK_APP_URL", "")
 COOK_CHAT_ID = int(os.environ.get("COOK_CHAT_ID", "0") or 0)
 
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "20"))
+REMINDER_MINUTE = int(os.environ.get("REMINDER_MINUTE", "0"))
+FAMILY_HEAD_USERNAME = os.environ.get("FAMILY_HEAD_USERNAME", "").lstrip("@").lower()
+FAMILY_HEAD_VOTE_WEIGHT = int(os.environ.get("FAMILY_HEAD_VOTE_WEIGHT", "2"))
 COMPILE_HOUR = int(os.environ.get("COMPILE_HOUR", "21"))
 COMPILE_MINUTE = int(os.environ.get("COMPILE_MINUTE", "30"))
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Africa/Johannesburg"))
@@ -377,12 +380,19 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
         for course in ("starter", "main", "side", "dessert")
     }
 
+    vote_weight = (
+        FAMILY_HEAD_VOTE_WEIGHT
+        if FAMILY_HEAD_USERNAME and (user.username or "").lower() == FAMILY_HEAD_USERNAME
+        else 1
+    )
+
     responses = load_today_responses()
     responses[str(user.id)] = {
         "name": user.first_name,
         "breakfast": breakfast_pick,
         "dinner": dinner_pick,
         "notes": data.get("notes", ""),
+        "vote_weight": vote_weight,
     }
     save_today_responses(responses)
 
@@ -440,21 +450,22 @@ def plural_portions(n):
 
 def _tally_meal(picks_with_names, courses):
     """Общая логика голосования для одного приёма пищи (завтрак или ужин).
-    picks_with_names — список (имя, словарь_выборов_по_категориям).
+    picks_with_names — список (имя, picks, вес_голоса). Вес влияет только на
+    определение победителя, но не на количество порций (participants).
     Возвращает {course: {"dish_id", "portions", "voters"}} только для тех
     категорий, где хоть кто-то голосовал."""
     votes = {c: Counter() for c in courses}
     voters = {c: {} for c in courses}
     participants = 0
 
-    for name, picks in picks_with_names:
+    for name, picks, weight in picks_with_names:
         picks = picks or {}
         if any(picks.get(c) for c in courses):
             participants += 1
         for c in courses:
             pick = picks.get(c)
             if pick:
-                votes[c][pick["id"]] += 1
+                votes[c][pick["id"]] += weight
                 voters[c].setdefault(pick["id"], []).append(
                     {"name": name, "egg": pick.get("egg"), "meat": pick.get("meat")}
                 )
@@ -477,11 +488,11 @@ def compute_daily_menu(responses):
     где каждое значение — результат _tally_meal (может быть пустым словарём,
     если никто не голосовал)."""
     breakfast = _tally_meal(
-        [(r["name"], r.get("breakfast")) for r in responses.values()],
+        [(r["name"], r.get("breakfast"), r.get("vote_weight", 1)) for r in responses.values()],
         ("main", "dessert"),
     )
     dinner = _tally_meal(
-        [(r["name"], r.get("dinner")) for r in responses.values()],
+        [(r["name"], r.get("dinner"), r.get("vote_weight", 1)) for r in responses.values()],
         ("starter", "main", "side", "dessert"),
     )
     return {"breakfast": breakfast, "dinner": dinner}
@@ -732,7 +743,7 @@ def main():
 
     job_queue = app.job_queue
     job_queue.run_daily(
-        send_evening_reminders, time=dtime(hour=REMINDER_HOUR, minute=0, tzinfo=TIMEZONE)
+        send_evening_reminders, time=dtime(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, tzinfo=TIMEZONE)
     )
     job_queue.run_daily(
         compile_and_send_to_cook,
