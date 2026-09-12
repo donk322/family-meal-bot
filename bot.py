@@ -51,6 +51,9 @@ LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "8"))
 # buffer for seconds.
 PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "1"))
 
+# /whatstobuy reports shortfall for a full family-size batch, not one serving.
+WHATSTOBUY_SERVINGS = int(os.environ.get("WHATSTOBUY_SERVINGS", "8"))
+
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -316,8 +319,9 @@ async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for ing in dish["ingredients"]:
             if ing["name"] in PANTRY_STAPLES:
                 continue
+            needed_for_batch = ing["amount_per_serving"] * WHATSTOBUY_SERVINGS
             have = inventory.get(ing["name"], {}).get("amount", 0)
-            shortfall = ing["amount_per_serving"] - have
+            shortfall = needed_for_batch - have
             if shortfall > 0:
                 existing = missing.get(ing["name"])
                 if not existing or existing["amount"] < shortfall:
