@@ -331,10 +331,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "closes, you'll get a message here with the winning dishes, scaled "
         "to the right number of portions, with full step-by-step recipes.\n\n"
         "Commands:\n"
-        "/start — register this chat to receive the daily menu\n"
-        "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/stock — see what's currently in the kitchen\n"
+        "/updatestock — quickly enter what's in the kitchen after a shopping trip\n"
         "/whatstobuy — see what's missing to unlock more dishes from the menu\n"
+        "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/help — show this message again"
     )
     await update.message.reply_text(text)
