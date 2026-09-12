@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Обновить запасы</title>
+<title>Update Stock</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -84,49 +84,84 @@
 </style>
 </head>
 <body>
-  <p class="kicker">Запасы на кухне</p>
-  <h1>Что сейчас есть дома?</h1>
-  <p class="sub">Впиши, сколько чего есть после похода в магазин. Пустые поля не трогаем — только заполненные обновятся.</p>
+  <p class="kicker">Kitchen Stock</p>
+  <h1>What's in the kitchen right now?</h1>
+  <p class="sub">Enter what you have after a shopping trip. Leave blank fields untouched — only filled-in ones will update.</p>
 
-  <input type="text" id="search" placeholder="Поиск продукта...">
+  <input type="text" id="search" placeholder="Search for an item...">
   <div id="list"></div>
-  <p class="hint">Заполняй только то, что реально пересчитал — остальное останется как было</p>
+  <p class="hint">Only fill in what you actually counted — everything else stays as it was</p>
 
 <script>
+  // "ru" is the internal key the bot uses (must match dishes.json exactly) —
+  // "en" and "unitEn" are just what's shown on screen to the cook.
   const INGREDIENTS = [
-    {"name": "авокадо", "unit": "г"}, {"name": "банан", "unit": "г"},
-    {"name": "безглютеновый хлеб", "unit": "шт"}, {"name": "безглютеновый хлеб (на панировку)", "unit": "г"},
-    {"name": "бекон", "unit": "г"}, {"name": "болгарский перец", "unit": "г"},
-    {"name": "ветчина", "unit": "г"}, {"name": "говядина", "unit": "г"},
-    {"name": "говядина отварная", "unit": "г"}, {"name": "говяжий стейк", "unit": "г"},
-    {"name": "говяжий фарш", "unit": "г"}, {"name": "горчица", "unit": "г"},
-    {"name": "греческий йогурт", "unit": "г"}, {"name": "гречневая крупа", "unit": "г"},
-    {"name": "зира", "unit": "г"}, {"name": "йогурт натуральный", "unit": "г"},
-    {"name": "картофель", "unit": "г"}, {"name": "колбаски", "unit": "г"},
-    {"name": "красный винный уксус", "unit": "мл"}, {"name": "кукурузные тако-шеллы", "unit": "шт"},
-    {"name": "куриное бедро", "unit": "г"}, {"name": "куриное филе", "unit": "г"},
-    {"name": "лайм", "unit": "г"}, {"name": "лимон", "unit": "г"},
-    {"name": "лимонный сок", "unit": "мл"}, {"name": "лук репчатый", "unit": "г"},
-    {"name": "молоко", "unit": "мл"}, {"name": "морковь", "unit": "г"},
-    {"name": "мёд", "unit": "г"}, {"name": "овощной бульон", "unit": "мл"},
-    {"name": "огурец", "unit": "г"}, {"name": "огурцы солёные", "unit": "г"},
-    {"name": "оливковое масло", "unit": "мл"}, {"name": "орегано", "unit": "г"},
-    {"name": "паприка", "unit": "г"}, {"name": "пармезан", "unit": "г"},
-    {"name": "петрушка", "unit": "г"}, {"name": "помидор", "unit": "г"},
-    {"name": "растительное масло", "unit": "мл"}, {"name": "рис", "unit": "г"},
-    {"name": "рис арборио", "unit": "г"}, {"name": "рис длиннозёрный", "unit": "г"},
-    {"name": "розмарин", "unit": "г"}, {"name": "свежая зелень", "unit": "г"},
-    {"name": "свёкла", "unit": "г"}, {"name": "слабосолёный лосось", "unit": "г"},
-    {"name": "сливки", "unit": "мл"}, {"name": "сливочное масло", "unit": "г"},
-    {"name": "сметана", "unit": "мл"}, {"name": "соль", "unit": "г"},
-    {"name": "специи для тако", "unit": "г"}, {"name": "сыр твёрдый", "unit": "г"},
-    {"name": "томатная паста", "unit": "г"}, {"name": "укроп", "unit": "г"},
-    {"name": "уксус", "unit": "мл"}, {"name": "фасоль в томате", "unit": "г"},
-    {"name": "филе белой рыбы", "unit": "г"}, {"name": "филе лосося", "unit": "г"},
-    {"name": "цукини", "unit": "г"}, {"name": "чеснок", "unit": "г"},
-    {"name": "чили хлопья", "unit": "г"}, {"name": "чёрный перец", "unit": "г"},
-    {"name": "шампиньоны", "unit": "г"}, {"name": "яблоко", "unit": "г"},
-    {"name": "ягоды", "unit": "г"}, {"name": "яйца", "unit": "шт"}
+    {"ru": "авокадо", "en": "Avocado", "unitEn": "g"},
+    {"ru": "банан", "en": "Banana", "unitEn": "g"},
+    {"ru": "безглютеновый хлеб", "en": "Gluten-free bread", "unitEn": "pcs"},
+    {"ru": "безглютеновый хлеб (на панировку)", "en": "Gluten-free bread (for breadcrumbs)", "unitEn": "g"},
+    {"ru": "бекон", "en": "Bacon", "unitEn": "g"},
+    {"ru": "болгарский перец", "en": "Bell pepper", "unitEn": "g"},
+    {"ru": "ветчина", "en": "Ham", "unitEn": "g"},
+    {"ru": "говядина", "en": "Beef", "unitEn": "g"},
+    {"ru": "говядина отварная", "en": "Boiled beef", "unitEn": "g"},
+    {"ru": "говяжий стейк", "en": "Beef steak", "unitEn": "g"},
+    {"ru": "говяжий фарш", "en": "Ground beef", "unitEn": "g"},
+    {"ru": "горчица", "en": "Mustard", "unitEn": "g"},
+    {"ru": "греческий йогурт", "en": "Greek yogurt", "unitEn": "g"},
+    {"ru": "гречневая крупа", "en": "Buckwheat groats", "unitEn": "g"},
+    {"ru": "зира", "en": "Cumin", "unitEn": "g"},
+    {"ru": "йогурт натуральный", "en": "Plain yogurt", "unitEn": "g"},
+    {"ru": "картофель", "en": "Potato", "unitEn": "g"},
+    {"ru": "колбаски", "en": "Sausages", "unitEn": "g"},
+    {"ru": "красный винный уксус", "en": "Red wine vinegar", "unitEn": "ml"},
+    {"ru": "кукурузные тако-шеллы", "en": "Corn taco shells", "unitEn": "pcs"},
+    {"ru": "куриное бедро", "en": "Chicken thigh", "unitEn": "g"},
+    {"ru": "куриное филе", "en": "Chicken breast", "unitEn": "g"},
+    {"ru": "лайм", "en": "Lime", "unitEn": "g"},
+    {"ru": "лимон", "en": "Lemon", "unitEn": "g"},
+    {"ru": "лимонный сок", "en": "Lemon juice", "unitEn": "ml"},
+    {"ru": "лук репчатый", "en": "Onion", "unitEn": "g"},
+    {"ru": "молоко", "en": "Milk", "unitEn": "ml"},
+    {"ru": "морковь", "en": "Carrot", "unitEn": "g"},
+    {"ru": "мёд", "en": "Honey", "unitEn": "g"},
+    {"ru": "овощной бульон", "en": "Vegetable broth", "unitEn": "ml"},
+    {"ru": "огурец", "en": "Cucumber", "unitEn": "g"},
+    {"ru": "огурцы солёные", "en": "Pickled cucumbers", "unitEn": "g"},
+    {"ru": "оливковое масло", "en": "Olive oil", "unitEn": "ml"},
+    {"ru": "орегано", "en": "Oregano", "unitEn": "g"},
+    {"ru": "паприка", "en": "Paprika", "unitEn": "g"},
+    {"ru": "пармезан", "en": "Parmesan", "unitEn": "g"},
+    {"ru": "петрушка", "en": "Parsley", "unitEn": "g"},
+    {"ru": "помидор", "en": "Tomato", "unitEn": "g"},
+    {"ru": "растительное масло", "en": "Vegetable oil", "unitEn": "ml"},
+    {"ru": "рис", "en": "Rice", "unitEn": "g"},
+    {"ru": "рис арборио", "en": "Arborio rice", "unitEn": "g"},
+    {"ru": "рис длиннозёрный", "en": "Long-grain rice", "unitEn": "g"},
+    {"ru": "розмарин", "en": "Rosemary", "unitEn": "g"},
+    {"ru": "свежая зелень", "en": "Fresh herbs", "unitEn": "g"},
+    {"ru": "свёкла", "en": "Beetroot", "unitEn": "g"},
+    {"ru": "слабосолёный лосось", "en": "Lightly salted salmon", "unitEn": "g"},
+    {"ru": "сливки", "en": "Cream", "unitEn": "ml"},
+    {"ru": "сливочное масло", "en": "Butter", "unitEn": "g"},
+    {"ru": "сметана", "en": "Sour cream", "unitEn": "ml"},
+    {"ru": "соль", "en": "Salt", "unitEn": "g"},
+    {"ru": "специи для тако", "en": "Taco seasoning", "unitEn": "g"},
+    {"ru": "сыр твёрдый", "en": "Hard cheese", "unitEn": "g"},
+    {"ru": "томатная паста", "en": "Tomato paste", "unitEn": "g"},
+    {"ru": "укроп", "en": "Dill", "unitEn": "g"},
+    {"ru": "уксус", "en": "Vinegar", "unitEn": "ml"},
+    {"ru": "фасоль в томате", "en": "Baked beans (in tomato sauce)", "unitEn": "g"},
+    {"ru": "филе белой рыбы", "en": "White fish fillet", "unitEn": "g"},
+    {"ru": "филе лосося", "en": "Salmon fillet", "unitEn": "g"},
+    {"ru": "цукини", "en": "Zucchini", "unitEn": "g"},
+    {"ru": "чеснок", "en": "Garlic", "unitEn": "g"},
+    {"ru": "чили хлопья", "en": "Chili flakes", "unitEn": "g"},
+    {"ru": "чёрный перец", "en": "Black pepper", "unitEn": "g"},
+    {"ru": "шампиньоны", "en": "Mushrooms", "unitEn": "g"},
+    {"ru": "яблоко", "en": "Apple", "unitEn": "g"},
+    {"ru": "ягоды", "en": "Berries", "unitEn": "g"},
+    {"ru": "яйца", "en": "Eggs", "unitEn": "pcs"}
   ];
 
   const tg = window.Telegram?.WebApp;
@@ -138,22 +173,22 @@
   function renderList(filter) {
     list.innerHTML = '';
     INGREDIENTS
-      .filter(i => !filter || i.name.toLowerCase().includes(filter.toLowerCase()))
+      .filter(i => !filter || i.en.toLowerCase().includes(filter.toLowerCase()))
       .forEach(ing => {
         const row = document.createElement('div');
         row.className = 'row';
         row.innerHTML = `
           <div>
-            <span class="row-name">${ing.name}</span>
-            <span class="row-unit"> (${ing.unit})</span>
+            <span class="row-name">${ing.en}</span>
+            <span class="row-unit"> (${ing.unitEn})</span>
           </div>
           <input type="number" min="0" step="any" inputmode="decimal"
-                 value="${values[ing.name] ?? ''}" data-name="${ing.name}" data-unit="${ing.unit}">
+                 value="${values[ing.ru] ?? ''}" data-ru="${ing.ru}">
         `;
         const input = row.querySelector('input');
         input.oninput = () => {
-          if (input.value === '') delete values[ing.name];
-          else values[ing.name] = parseFloat(input.value);
+          if (input.value === '') delete values[ing.ru];
+          else values[ing.ru] = parseFloat(input.value);
         };
         list.appendChild(row);
       });
@@ -163,21 +198,22 @@
   renderList('');
 
   function submit() {
-    const unitByName = Object.fromEntries(INGREDIENTS.map(i => [i.name, i.unit]));
+    const RU_UNIT = {"g": "г", "ml": "мл", "pcs": "шт"};
     const stock = {};
-    for (const name in values) {
-      stock[name] = { amount: values[name], unit: unitByName[name] };
+    for (const ru in values) {
+      const meta = INGREDIENTS.find(i => i.ru === ru);
+      stock[ru] = { amount: values[ru], unit: RU_UNIT[meta.unitEn] || meta.unitEn };
     }
     const payload = { type: 'stock', stock };
     if (tg) {
       tg.sendData(JSON.stringify(payload));
     } else {
-      alert('Открой это внутри Telegram, чтобы отправить данные');
+      alert('Open this inside Telegram to send your update');
     }
   }
 
   if (tg) {
-    tg.MainButton.setText('Сохранить остатки');
+    tg.MainButton.setText('Save Stock Levels');
     tg.MainButton.show();
     tg.MainButton.onClick(submit);
   }

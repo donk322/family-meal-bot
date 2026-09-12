@@ -42,7 +42,7 @@ WEEKLY_SHOPPING_MINUTE = int(os.environ.get("WEEKLY_SHOPPING_MINUTE", "35"))
 
 # Alert the cook right away if an ingredient has less than this many
 # typical servings left, instead of waiting for the weekly list.
-LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "2"))
+LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "8"))
 
 # Extra portions to cook on top of the number of people who voted, as a
 # buffer for seconds.
@@ -200,7 +200,7 @@ def menu_keyboard():
 
 def stock_keyboard():
     return ReplyKeyboardMarkup.from_button(
-        KeyboardButton(text="📦 Обновить запасы", web_app=WebAppInfo(url=STOCK_APP_URL))
+        KeyboardButton(text="📦 Update Stock", web_app=WebAppInfo(url=STOCK_APP_URL))
     )
 
 
@@ -266,12 +266,12 @@ async def addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def updatestock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not STOCK_APP_URL:
         await update.message.reply_text(
-            "STOCK_APP_URL не настроен — сначала задай эту переменную окружения."
+            "STOCK_APP_URL is not set — configure that environment variable first."
         )
         return
     await update.message.reply_text(
-        "Жми кнопку и впиши, сколько чего сейчас есть дома — заполняй только то, "
-        "что реально пересчитал, остальное не тронется.",
+        "Tap the button and enter what's currently in the kitchen — only fill in "
+        "what you actually counted, everything else stays as it was.",
         reply_markup=stock_keyboard(),
     )
 
@@ -303,8 +303,11 @@ async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ing["name"] in PANTRY_STAPLES:
                 continue
             have = inventory.get(ing["name"], {}).get("amount", 0)
-            if have < ing["amount_per_serving"]:
-                missing[ing["name"]] = ing["unit"]
+            shortfall = ing["amount_per_serving"] - have
+            if shortfall > 0:
+                existing = missing.get(ing["name"])
+                if not existing or existing["amount"] < shortfall:
+                    missing[ing["name"]] = {"amount": round(shortfall, 1), "unit": ing["unit"]}
 
     if not missing:
         await update.message.reply_text(
@@ -312,7 +315,10 @@ async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    lines = [f"- {to_en(name)} ({unit_to_en(unit)})" for name, unit in sorted(missing.items())]
+    lines = [
+        f"- {to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}"
+        for name, item in sorted(missing.items())
+    ]
     await update.message.reply_text(
         "To unlock more dishes from the menu, buy:\n" + "\n".join(lines)
     )
@@ -341,14 +347,14 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
     if data.get("type") == "stock":
         stock_update = data.get("stock", {})
         if not stock_update:
-            await update.message.reply_text("Ничего не заполнено — запасы не изменены.")
+            await update.message.reply_text("Nothing was filled in — stock unchanged.")
             return
         inventory = load_inventory()
         for name, item in stock_update.items():
             inventory[name] = {"amount": item["amount"], "unit": item["unit"]}
         save_inventory(inventory)
         await update.message.reply_text(
-            f"Обновил {len(stock_update)} позиций в запасах. Спасибо!"
+            f"Updated {len(stock_update)} item(s) in stock. Thanks!"
         )
         return
 
