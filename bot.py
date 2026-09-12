@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+from collections import Counter
 from datetime import time as dtime, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -42,6 +43,10 @@ WEEKLY_SHOPPING_MINUTE = int(os.environ.get("WEEKLY_SHOPPING_MINUTE", "35"))
 # Alert the cook right away if an ingredient has less than this many
 # typical servings left, instead of waiting for the weekly list.
 LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "2"))
+
+# Extra portions to cook on top of the number of people who voted, as a
+# buffer for seconds.
+PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "1"))
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -284,28 +289,37 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    def parse_picks(raw):
-        # Each item is {"id": dish_id, "egg": "...", "meat": "..."} — egg/meat optional
-        picks = []
-        for item in raw or []:
-            dish_id = item.get("id")
-            if dish_id in DISHES:
-                picks.append(item)
-        return picks
+    def valid_pick(pick):
+        if not pick or not isinstance(pick, dict):
+            return None
+        if pick.get("id") not in DISHES:
+            return None
+        return pick
 
-    breakfast_picks = parse_picks(data.get("breakfast"))
-    dinner_picks = parse_picks(data.get("dinner"))
+    breakfast_raw = data.get("breakfast") or {}
+    breakfast_pick = {
+        course: valid_pick(breakfast_raw.get(course))
+        for course in ("main", "dessert")
+    }
+
+    dinner_raw = data.get("dinner") or {}
+    dinner_pick = {
+        course: valid_pick(dinner_raw.get(course))
+        for course in ("starter", "main", "side", "dessert")
+    }
 
     responses = load_today_responses()
     responses[str(user.id)] = {
         "name": user.first_name,
-        "breakfast": breakfast_picks,
-        "dinner": dinner_picks,
+        "breakfast": breakfast_pick,
+        "dinner": dinner_pick,
         "notes": data.get("notes", ""),
     }
     save_today_responses(responses)
 
-    await update.message.reply_text("Записал, спасибо! Повар получит это вечером.")
+    await update.message.reply_text(
+        "Записал твой голос, спасибо! Меню на завтра решится по общим голосам вечером."
+    )
 
 
 # ---------- scheduled jobs ----------
@@ -321,23 +335,6 @@ async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.warning("Не удалось отправить напоминание %s: %s", user_id, e)
-
-
-def aggregate_ingredients(responses):
-    """Sum ingredient amounts needed across every person's chosen dishes."""
-    needed = {}
-    for r in responses.values():
-        chosen_dishes = list(r.get("breakfast", [])) + list(r.get("dinner", []))
-        for pick in chosen_dishes:
-            dish_id = pick.get("id")
-            if not dish_id or dish_id not in DISHES:
-                continue
-            for ing in DISHES[dish_id]["ingredients"]:
-                key = ing["name"]
-                if key not in needed:
-                    needed[key] = {"amount": 0.0, "unit": ing["unit"]}
-                needed[key]["amount"] += ing["amount_per_serving"]
-    return needed
 
 
 def apply_inventory(needed):
@@ -372,26 +369,69 @@ def plural_portions(n):
     return "порций"
 
 
-def build_dish_groups(responses):
-    """Group selections by (meal_label, dish_id) -> list of {name, egg, meat}.
+def _tally_meal(picks_with_names, courses):
+    """Общая логика голосования для одного приёма пищи (завтрак или ужин).
+    picks_with_names — список (имя, словарь_выборов_по_категориям).
+    Возвращает {course: {"dish_id", "portions", "voters"}} только для тех
+    категорий, где хоть кто-то голосовал."""
+    votes = {c: Counter() for c in courses}
+    voters = {c: {} for c in courses}
+    participants = 0
 
-    This lets the cook batch-cook one dish for several people at once
-    instead of repeating the same recipe person by person, while still
-    keeping track of who wants their egg or meat done differently.
-    """
-    groups = {"завтрак": {}, "ужин": {}}
-    for r in responses.values():
-        for meal_label, picks in (("завтрак", r.get("breakfast", [])), ("ужин", r.get("dinner", []))):
-            for pick in picks:
-                dish_id = pick.get("id")
-                if dish_id not in DISHES:
-                    continue
-                groups[meal_label].setdefault(dish_id, []).append({
-                    "name": r["name"],
-                    "egg": pick.get("egg"),
-                    "meat": pick.get("meat"),
-                })
-    return groups
+    for name, picks in picks_with_names:
+        picks = picks or {}
+        if any(picks.get(c) for c in courses):
+            participants += 1
+        for c in courses:
+            pick = picks.get(c)
+            if pick:
+                votes[c][pick["id"]] += 1
+                voters[c].setdefault(pick["id"], []).append(
+                    {"name": name, "egg": pick.get("egg"), "meat": pick.get("meat")}
+                )
+
+    winners = {}
+    for c in courses:
+        if votes[c]:
+            dish_id, _ = votes[c].most_common(1)[0]
+            winners[c] = {
+                "dish_id": dish_id,
+                "portions": participants + PORTION_BUFFER_EXTRA,
+                "voters": voters[c][dish_id],
+            }
+    return winners
+
+
+def compute_daily_menu(responses):
+    """Считает голоса и определяет победителей по каждой под-категории
+    завтрака и ужина. Возвращает {"breakfast": {...}, "dinner": {...}},
+    где каждое значение — результат _tally_meal (может быть пустым словарём,
+    если никто не голосовал)."""
+    breakfast = _tally_meal(
+        [(r["name"], r.get("breakfast")) for r in responses.values()],
+        ("main", "dessert"),
+    )
+    dinner = _tally_meal(
+        [(r["name"], r.get("dinner")) for r in responses.values()],
+        ("starter", "main", "side", "dessert"),
+    )
+    return {"breakfast": breakfast, "dinner": dinner}
+
+
+def aggregate_ingredients_from_menu(menu):
+    needed = {}
+    def add_dish(dish_id, portions):
+        for ing in DISHES[dish_id]["ingredients"]:
+            key = ing["name"]
+            if key not in needed:
+                needed[key] = {"amount": 0.0, "unit": ing["unit"]}
+            needed[key]["amount"] += ing["amount_per_serving"] * portions
+
+    for item in menu["breakfast"].values():
+        add_dish(item["dish_id"], item["portions"])
+    for item in menu["dinner"].values():
+        add_dish(item["dish_id"], item["portions"])
+    return needed
 
 
 async def check_low_stock_and_alert(context: ContextTypes.DEFAULT_TYPE, inventory):
@@ -422,73 +462,111 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
 
     responses = load_today_responses()
     if not responses:
-        logger.info("Пока никто не ответил — пропускаю сборку")
+        logger.info("Пока никто не проголосовал — пропускаю сборку")
         return
 
-    # Group by dish so the cook can batch-cook for several people at once
-    # instead of repeating the same recipe person by person.
-    groups = build_dish_groups(responses)
-    meal_sections = []
-    for meal_label in ("завтрак", "ужин"):
-        dish_ids = groups[meal_label]
-        if not dish_ids:
-            continue
-        lines = [f"## {meal_label.capitalize()}"]
-        for dish_id, people in dish_ids.items():
-            dish = DISHES[dish_id]
-            portions = len(people)
-            scaled_ingredients = ", ".join(
-                f"{ing['name']} {round(ing['amount_per_serving'] * portions, 1)} {ing['unit']}"
-                for ing in dish["ingredients"]
-            )
-            steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
+    menu = compute_daily_menu(responses)
+    if not menu["breakfast"] and not menu["dinner"]:
+        logger.info("Голосов нет — пропускаю сборку")
+        return
 
-            name_labels = []
-            for p in people:
-                extras = []
-                if p.get("egg"):
-                    extras.append(f"яйцо: {p['egg']}")
-                if p.get("meat"):
-                    extras.append(f"мясо: {p['meat']}")
-                name_labels.append(f"{p['name']} ({', '.join(extras)})" if extras else p["name"])
+    def format_voters(voters):
+        labels = []
+        for v in voters:
+            extra = []
+            if v.get("egg"):
+                extra.append(f"яйцо: {v['egg']}")
+            if v.get("meat"):
+                extra.append(f"мясо: {v['meat']}")
+            labels.append(f"{v['name']} ({', '.join(extra)})" if extra else v["name"])
+        return ", ".join(labels)
 
-            lines.append(
-                f"{dish['name']} — на {portions} {plural_portions(portions)} "
-                f"({', '.join(name_labels)}). Ингредиенты: {scaled_ingredients}. "
-                f"Приготовление: {steps} Подача: {dish['serving_note']}"
-            )
-        meal_sections.append("\n\n".join(lines))
+    def format_dish_block(dish_id, portions, voters):
+        dish = DISHES[dish_id]
+        scaled = ", ".join(
+            f"{ing['name']} {round(ing['amount_per_serving'] * portions, 1)} {ing['unit']}"
+            for ing in dish["ingredients"]
+        )
+        steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
+        return (
+            f"{dish['name']} — на {portions} {plural_portions(portions)} "
+            f"(голосовали: {format_voters(voters)}). "
+            f"Ингредиенты: {scaled}. Приготовление: {steps} Подача: {dish['serving_note']}"
+        )
+
+    sections = []
+    breakfast_labels = {"main": "Основное", "dessert": "Десерт"}
+    if menu["breakfast"]:
+        lines = ["## Завтрак"]
+        for course in ("main", "dessert"):
+            if course in menu["breakfast"]:
+                item = menu["breakfast"][course]
+                lines.append(f"### {breakfast_labels[course]}")
+                lines.append(format_dish_block(item["dish_id"], item["portions"], item["voters"]))
+        sections.append("\n\n".join(lines))
+
+    dinner_labels = {"starter": "Стартер", "main": "Основное", "side": "Гарнир", "dessert": "Десерт"}
+    if menu["dinner"]:
+        lines = ["## Ужин"]
+        for course in ("starter", "main", "side", "dessert"):
+            if course in menu["dinner"]:
+                item = menu["dinner"][course]
+                lines.append(f"### {dinner_labels[course]}")
+                lines.append(format_dish_block(item["dish_id"], item["portions"], item["voters"]))
+        sections.append("\n\n".join(lines))
 
     notes_lines = [f"{r['name']}: {r['notes']}" for r in responses.values() if r.get("notes")]
     if notes_lines:
-        meal_sections.append("Комментарии по людям:\n" + "\n".join(notes_lines))
+        sections.append("Комментарии по людям:\n" + "\n".join(notes_lines))
 
-    plan_summary = "\n\n---\n\n".join(meal_sections)
+    plan_summary = "\n\n---\n\n".join(sections)
 
-    needed = aggregate_ingredients(responses)
+    needed = aggregate_ingredients_from_menu(menu)
     shopping_list, updated_inventory = apply_inventory(needed)
     save_inventory(updated_inventory)
     await check_low_stock_and_alert(context, updated_inventory)
 
+    if shopping_list:
+        weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
+        for name, item in shopping_list.items():
+            if name in weekly:
+                weekly[name]["amount"] = round(weekly[name]["amount"] + item["amount"], 1)
+                weekly[name]["unit"] = item["unit"]
+            else:
+                weekly[name] = {"amount": item["amount"], "unit": item["unit"]}
+        save_json(WEEKLY_SHORTFALL_FILE, weekly)
+
     prompt = (
-        "Ты помогаешь повару приготовить еду для семьи на 7 человек. Все блюда "
-        "без глютена — это уже учтено в рецептах ниже, не меняй ингредиенты и "
-        "их количество (они уже пересчитаны на нужное число порций).\n\n"
-        f"Вот план на завтра, сгруппированный по блюду, а не по человеку — "
-        f"чтобы повар мог готовить сразу партиями:\n{plan_summary}\n\n"
-        "Отформатируй это в чистое, удобное для повара сообщение: отдельный "
-        "блок на каждое блюдо с указанием, для кого оно и на сколько порций, "
-        "ингредиентами (уже пересчитанными на нужное число порций) и шагами "
-        "приготовления. Рядом с именами некоторых людей в скобках указано, "
-        "как приготовить их яйцо или мясо (например «Аня (яйцо: жидкий "
-        "желток)») — обязательно вынеси это отдельной пометкой внутри блока "
-        "блюда, чтобы повар знал, что в общей партии часть порций нужно снять "
-        "с огня раньше или позже остальных, и явно укажи, кому какая степень "
-        "готовности нужна. Если в разделе «Комментарии по людям» есть аллергия "
-        "или пожелание, которое касается конкретного человека внутри общей "
-        "партии — явно укажи в этом блоке, что одну порцию нужно отделить и "
-        "видоизменить, и как именно. Не меняй количества и ингредиенты там, "
-        "где комментариев нет."
+        "Ты помогаешь повару приготовить еду для семьи на 7 человек по итогам "
+        "голосования — только победившие блюда, а не всё, что кто-то предлагал. "
+        "Все блюда без глютена — уже учтено в рецептах ниже, не меняй "
+        "ингредиенты и их количество (уже пересчитаны на нужное число "
+        "порций).\n\n"
+        "Повар не очень опытный — сохраняй ВСЕ шаги приготовления дословно и "
+        "по порядку, ничего не сокращай и не объединяй в более общие фразы. "
+        "Рецепты специально написаны подробно (точное время, температура, "
+        "признаки готовности) — это важно сохранить, а не пересказать короче. "
+        "Твоя задача — только красиво оформить и сгруппировать, не редактируя "
+        "содержание рецептов.\n\n"
+        "Это шведский стол: каждое блюдо готовится одной большой порцией и "
+        "подаётся на общей посуде (одна большая тарелка/миска/поднос), а не "
+        "раскладывается по отдельным персональным тарелкам — люди накладывают "
+        "себе сами. Учти это в формулировке подачи. Если ингредиенты "
+        "пересчитаны на много порций (например, больше 6) и блюдо жарится на "
+        "сковороде (яичница, омлет, скрэмбл, оладьи) — напиши повару "
+        "предупреждение, что может понадобиться сковорода побольше или "
+        "готовка в несколько заходов, потому что всё сразу может не "
+        "поместиться.\n\n"
+        f"Вот меню на завтра по итогам голосования:\n{plan_summary}\n\n"
+        "Отформатируй это в чистое сообщение для повара: раздел «Завтрак» с "
+        "подразделами Основное/Десерт, раздел «Ужин» с подразделами "
+        "Стартер/Основное/Гарнир/Десерт (пропускай подраздел, если в него "
+        "никто не голосовал). Рядом с именами в скобках указана прожарка "
+        "яйца/мяса — обязательно вынеси её отдельной пометкой внутри блюда, "
+        "чтобы повар знал, что часть порций нужно снять с огня раньше или "
+        "позже. Если в «Комментариях по людям» есть аллергия или пожелание — "
+        "явно укажи в подходящем блюде, что одну порцию нужно отделить и "
+        "видоизменить, и как именно."
     )
 
     message = client.messages.create(
@@ -499,22 +577,9 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     recipe_text = "".join(
         block.text for block in message.content if block.type == "text"
     )
-
     chunks = [recipe_text[i : i + 3500] for i in range(0, len(recipe_text), 3500)]
     for chunk in chunks:
         await context.bot.send_message(chat_id=COOK_CHAT_ID, text=chunk)
-
-    # Don't send today's shortfall as its own message — fold it into the
-    # running weekly total instead, sent once a week (see send_weekly_shopping_list).
-    if shopping_list:
-        weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
-        for name, item in shopping_list.items():
-            if name in weekly:
-                weekly[name]["amount"] = round(weekly[name]["amount"] + item["amount"], 1)
-                weekly[name]["unit"] = item["unit"]
-            else:
-                weekly[name] = {"amount": item["amount"], "unit": item["unit"]}
-        save_json(WEEKLY_SHORTFALL_FILE, weekly)
 
 
 async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
