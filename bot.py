@@ -70,6 +70,53 @@ PANTRY_STAPLES = {
     "уксус", "красный винный уксус", "горчица", "свежая зелень",
 }
 
+# The cook is English-speaking — translate ingredient names/units wherever
+# they're shown to them directly (outside the Claude-generated menu, which
+# is translated via the prompt instead).
+INGREDIENT_EN = {
+    "авокадо": "avocado", "банан": "banana",
+    "безглютеновый хлеб": "gluten-free bread",
+    "безглютеновый хлеб (на панировку)": "gluten-free bread (for breadcrumbs)",
+    "бекон": "bacon", "болгарский перец": "bell pepper", "ветчина": "ham",
+    "говядина": "beef", "говядина отварная": "boiled beef",
+    "говяжий стейк": "beef steak", "говяжий фарш": "ground beef",
+    "горчица": "mustard", "греческий йогурт": "Greek yogurt",
+    "гречневая крупа": "buckwheat groats", "зира": "cumin",
+    "йогурт натуральный": "plain yogurt", "картофель": "potato",
+    "колбаски": "sausages", "красный винный уксус": "red wine vinegar",
+    "кукурузные тако-шеллы": "corn taco shells",
+    "куриное бедро": "chicken thigh", "куриное филе": "chicken breast",
+    "лайм": "lime", "лимон": "lemon", "лимонный сок": "lemon juice",
+    "лук репчатый": "onion", "молоко": "milk", "морковь": "carrot",
+    "мёд": "honey", "овощной бульон": "vegetable broth", "огурец": "cucumber",
+    "огурцы солёные": "pickled cucumbers", "оливковое масло": "olive oil",
+    "орегано": "oregano", "паприка": "paprika", "пармезан": "parmesan",
+    "петрушка": "parsley", "помидор": "tomato",
+    "растительное масло": "vegetable oil", "рис": "rice",
+    "рис арборио": "arborio rice", "рис длиннозёрный": "long-grain rice",
+    "розмарин": "rosemary", "свежая зелень": "fresh herbs",
+    "свёкла": "beetroot", "слабосолёный лосось": "lightly salted salmon",
+    "сливки": "cream", "сливочное масло": "butter", "сметана": "sour cream",
+    "соль": "salt", "специи для тако": "taco seasoning",
+    "сыр твёрдый": "hard cheese", "томатная паста": "tomato paste",
+    "укроп": "dill", "уксус": "vinegar",
+    "фасоль в томате": "baked beans (in tomato sauce)",
+    "филе белой рыбы": "white fish fillet", "филе лосося": "salmon fillet",
+    "цукини": "zucchini", "чеснок": "garlic", "чили хлопья": "chili flakes",
+    "чёрный перец": "black pepper", "шампиньоны": "mushrooms",
+    "яблоко": "apple", "ягоды": "berries", "яйца": "eggs",
+}
+
+UNIT_EN = {"г": "g", "кг": "kg", "мл": "ml", "л": "l", "шт": "pcs"}
+
+
+def to_en(name):
+    return INGREDIENT_EN.get(name, name)
+
+
+def unit_to_en(unit):
+    return UNIT_EN.get(unit, unit)
+
 
 def build_ingredient_typical_usage():
     """Average amount_per_serving for each ingredient across every dish that uses it.
@@ -181,10 +228,10 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     inventory = load_inventory()
     if not inventory:
-        await update.message.reply_text("Запасы пока пустые — ничего не отмечено.")
+        await update.message.reply_text("Stock is currently empty — nothing recorded yet.")
         return
-    lines = [f"{name}: {info['amount']} {info['unit']}" for name, info in sorted(inventory.items())]
-    await update.message.reply_text("Текущие запасы:\n" + "\n".join(lines))
+    lines = [f"{to_en(name)}: {info['amount']} {unit_to_en(info['unit'])}" for name, info in sorted(inventory.items())]
+    await update.message.reply_text("Current stock:\n" + "\n".join(lines))
 
 
 async def addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -261,14 +308,30 @@ async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not missing:
         await update.message.reply_text(
-            "Всё есть — любое блюдо из меню можно готовить прямо сейчас."
+            "Everything's in stock — any dish on the menu can be made right now."
         )
         return
 
-    lines = [f"- {name} ({unit})" for name, unit in sorted(missing.items())]
+    lines = [f"- {to_en(name)} ({unit_to_en(unit)})" for name, unit in sorted(missing.items())]
     await update.message.reply_text(
-        "Чтобы открыть больше блюд из меню, докупите:\n" + "\n".join(lines)
+        "To unlock more dishes from the menu, buy:\n" + "\n".join(lines)
     )
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "Here's what this bot does and the commands you might need:\n\n"
+        "Every evening the family votes on tomorrow's menu. Once voting "
+        "closes, you'll get a message here with the winning dishes, scaled "
+        "to the right number of portions, with full step-by-step recipes.\n\n"
+        "Commands:\n"
+        "/start — register this chat to receive the daily menu\n"
+        "/whoami — show this chat's ID (only needed once, during setup)\n"
+        "/stock — see what's currently in the kitchen\n"
+        "/whatstobuy — see what's missing to unlock more dishes from the menu\n"
+        "/help — show this message again"
+    )
+    await update.message.reply_text(text)
 
 
 async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -447,11 +510,12 @@ async def check_low_stock_and_alert(context: ContextTypes.DEFAULT_TYPE, inventor
         servings_left = info["amount"] / typical
         if servings_left < LOW_STOCK_SERVINGS:
             low_items.append(
-                f"{name} — осталось на {round(servings_left, 1)} порц. ({info['amount']} {info['unit']})"
+                f"{to_en(name)} — about {round(servings_left, 1)} servings left "
+                f"({info['amount']} {unit_to_en(info['unit'])})"
             )
 
     if low_items:
-        text = "⚠️ Скоро понадобится купить:\n" + "\n".join(low_items)
+        text = "⚠️ Running low, will need to buy soon:\n" + "\n".join(low_items)
         await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
 
 
@@ -537,6 +601,14 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         save_json(WEEKLY_SHORTFALL_FILE, weekly)
 
     prompt = (
+        "Write your entire response in clear, simple English — the cook reading "
+        "this speaks English, not Russian. Translate every dish name, ingredient "
+        "name, and instruction into English; do not leave any Russian words in "
+        "your output.\n\n"
+        "The cook is not very experienced, so translate the recipe steps in full "
+        "detail — every single step, with exact times, temperatures, and doneness "
+        "cues. Do not summarize, shorten, or merge steps together. If a step "
+        "mentions a specific technique, keep the explanation of how to do it.\n\n"
         "Ты помогаешь повару приготовить еду для семьи на 7 человек по итогам "
         "голосования — только победившие блюда, а не всё, что кто-то предлагал. "
         "Все блюда без глютена — уже учтено в рецептах ниже, не меняй "
@@ -591,14 +663,14 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
     if not weekly:
         await context.bot.send_message(
             chat_id=COOK_CHAT_ID,
-            text="Список покупок на неделю: всё нужное уже было в запасах, докупать нечего.",
+            text="This week's shopping list: everything needed is already in stock, nothing to buy.",
         )
         return
 
-    lines = [f"{name}: {item['amount']} {item['unit']}" for name, item in weekly.items()]
+    lines = [f"{to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}" for name, item in weekly.items()]
     text = (
-        "Список покупок на неделю:\n" + "\n".join(lines) +
-        "\n\nКогда купите — отправьте боту команду /restock, чтобы обновить запасы."
+        "This week's shopping list:\n" + "\n".join(lines) +
+        "\n\nOnce you've bought everything, send the bot /restock to update stock levels."
     )
     await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
 
@@ -649,6 +721,7 @@ def main():
     app.add_handler(CommandHandler("updatestock", updatestock_cmd))
     app.add_handler(CommandHandler("restock", restock))
     app.add_handler(CommandHandler("whatstobuy", whatstobuy_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
