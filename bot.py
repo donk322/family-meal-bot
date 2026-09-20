@@ -82,7 +82,6 @@ PANTRY_STAPLES = {
 INGREDIENT_EN = {
     "авокадо": "avocado", "банан": "banana",
     "безглютеновый хлеб": "gluten-free bread",
-    "безглютеновый хлеб (на панировку)": "gluten-free bread (for breadcrumbs)",
     "бекон": "bacon", "болгарский перец": "bell pepper", "ветчина": "ham",
     "говядина": "beef", "говядина отварная": "boiled beef",
     "говяжий стейк": "beef steak", "говяжий фарш": "ground beef",
@@ -92,7 +91,7 @@ INGREDIENT_EN = {
     "колбаски": "sausages", "красный винный уксус": "red wine vinegar",
     "кукурузные тако-шеллы": "corn taco shells",
     "куриное бедро": "chicken thigh", "куриное филе": "chicken breast",
-    "лайм": "lime", "лимон": "lemon", "лимонный сок": "lemon juice",
+    "лайм": "lime", "лимон": "lemon",
     "лук репчатый": "onion", "молоко": "milk", "морковь": "carrot",
     "мёд": "honey", "овощной бульон": "vegetable broth", "огурец": "cucumber",
     "огурцы солёные": "pickled cucumbers", "оливковое масло": "olive oil",

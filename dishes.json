@@ -121,9 +121,9 @@
         "amount_per_serving": 60
       },
       {
-        "name": "лимонный сок",
-        "unit": "мл",
-        "amount_per_serving": 10
+        "name": "лимон",
+        "unit": "г",
+        "amount_per_serving": 20
       },
       {
         "name": "уксус",
@@ -430,9 +430,9 @@
         "amount_per_serving": 2
       },
       {
-        "name": "лимонный сок",
-        "unit": "мл",
-        "amount_per_serving": 5
+        "name": "лимон",
+        "unit": "г",
+        "amount_per_serving": 10
       },
       {
         "name": "уксус",
@@ -818,9 +818,9 @@
         "amount_per_serving": 8
       },
       {
-        "name": "лимонный сок",
-        "unit": "мл",
-        "amount_per_serving": 15
+        "name": "лимон",
+        "unit": "г",
+        "amount_per_serving": 30
       },
       {
         "name": "оливковое масло",
@@ -1057,9 +1057,9 @@
         "amount_per_serving": 1
       },
       {
-        "name": "безглютеновый хлеб (на панировку)",
-        "unit": "г",
-        "amount_per_serving": 30
+        "name": "безглютеновый хлеб",
+        "unit": "шт",
+        "amount_per_serving": 1
       },
       {
         "name": "картофель",
