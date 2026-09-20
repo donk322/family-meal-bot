@@ -200,6 +200,12 @@
   </section>
 
   <section>
+    <h2>Мясное блюдо</h2>
+    <p class="optional-tag">Необязательно</p>
+    <div id="breakfastMeatList"></div>
+  </section>
+
+  <section>
     <h2>Десерт на завтрак</h2>
     <p class="optional-tag">Необязательно</p>
     <div id="breakfastDessertList"></div>
@@ -249,12 +255,26 @@
     {"id": "breakfast_potato_bacon_frittata", "name": "Фриттата с картофелем и беконом", "description": "Запечённый омлет с картофелем, беконом и сыром", "photoEmoji": "🍳"},
     {"id": "breakfast_salmon_scramble_toast", "name": "Скрэмбл с лососем на тосте", "description": "Нежный скрэмбл и слабосолёный лосось на безглютеновом тосте", "photoEmoji": "🐟"},
     {"id": "breakfast_avocado_toast_egg", "name": "Авокадо-тост с яйцом пашот", "description": "Тост с авокадо и яйцом пашот на вашем безглютеновом хлебе", "photoEmoji": "🥑"},
-    {"id": "breakfast_beef_hash_egg", "name": "Хэш с говядиной и яйцом", "description": "Обжаренный картофель с говядиной и яйцом сверху", "photoEmoji": "🍳"}
+    {"id": "breakfast_beef_hash_egg", "name": "Хэш с говядиной и яйцом", "description": "Обжаренный картофель с говядиной и яйцом сверху", "photoEmoji": "🍳"},
+    {"id": "breakfast_buckwheat_porridge", "name": "Гречневая каша", "description": "Простая гречневая каша на молоке со сливочным маслом", "photoEmoji": "🥣"}
+  ];
+
+  const BREAKFAST_MEAT = [
+    {"id": "breakfast_chicken_thigh_pan", "name": "Куриные бёдра на сковороде", "description": "Сочное куриное бедро с хрустящей корочкой", "photoEmoji": "🍗"},
+    {"id": "breakfast_meat_patties", "name": "Мясные котлеты (без панировки)", "description": "Простые сытные говяжьи котлеты без панировки", "photoEmoji": "🥩"},
+    {"id": "breakfast_steak_ham_cheese", "name": "Стейк с ветчиной и сыром", "description": "Стейк, покрытый ветчиной и расплавленным сыром", "photoEmoji": "🥩"}
   ];
 
   const DINNER_STARTERS = [
     {"id": "dinner_starter_greek_salad", "name": "Греческий салат", "description": "Огурцы, помидоры, перец и сыр с оливковым маслом", "photoEmoji": "🥗"},
-    {"id": "dinner_starter_vinegret", "name": "Винегрет", "description": "Классический салат из свёклы, картофеля, моркови и солёных огурцов", "photoEmoji": "🥗"}
+    {"id": "dinner_starter_vinegret", "name": "Винегрет", "description": "Классический салат из свёклы, картофеля, моркови и солёных огурцов", "photoEmoji": "🥗"},
+    {"id": "dinner_starter_veg_plate", "name": "Овощная нарезка", "description": "Свежие огурцы, помидоры и перец", "photoEmoji": "🥒"},
+    {"id": "dinner_starter_guacamole", "name": "Гуакамоле", "description": "Классическое мексиканское пюре из авокадо", "photoEmoji": "🥑"},
+    {"id": "dinner_starter_carrot_salad", "name": "Морковный салат", "description": "Простой салат из тёртой моркови с чесноком", "photoEmoji": "🥕"},
+    {"id": "dinner_starter_tomato_herbs", "name": "Помидоры с зеленью", "description": "Нарезанные помидоры с оливковым маслом и петрушкой", "photoEmoji": "🍅"},
+    {"id": "dinner_starter_salmon_avocado", "name": "Салат с лососем и авокадо", "description": "Слабосолёный лосось с авокадо, огурцом и лимоном", "photoEmoji": "🐟"},
+    {"id": "dinner_starter_chicken_veg_salad", "name": "Салат с курицей и овощами", "description": "Куриное филе на гриле с огурцом, помидором и перцем", "photoEmoji": "🥗"},
+    {"id": "dinner_starter_thai_beef_salad", "name": "Тайский салат с говядиной", "description": "Тонко нарезанный стейк с лаймом, луком и свежей зеленью", "photoEmoji": "🥩"}
   ];
 
   const DINNER_MAINS = [
@@ -267,7 +287,11 @@
     {"id": "dinner_steak_chimichurri", "name": "Стейк с чимичурри", "description": "Говядина на гриле с аргентинским соусом чимичурри и картофелем", "photoEmoji": "🥩", "customize": ["meat"]},
     {"id": "dinner_chicken_plov", "name": "Плов с курицей", "description": "Ароматный плов с куриным бедром, морковью и специями", "photoEmoji": "🍛"},
     {"id": "dinner_beef_buckwheat_stew", "name": "Тушёная говядина с гречкой", "description": "Мягкая тушёная говядина с рассыпчатой гречневой кашей", "photoEmoji": "🍲"},
-    {"id": "dinner_fish_cutlets_mash", "name": "Рыбные котлеты с картофельным пюре", "description": "Нежные котлеты из белой рыбы с пюре из картофеля", "photoEmoji": "🐟"}
+    {"id": "dinner_fish_cutlets_mash", "name": "Рыбные котлеты с картофельным пюре", "description": "Нежные котлеты из белой рыбы с пюре из картофеля", "photoEmoji": "🐟"},
+    {"id": "dinner_chicken_mince_pasta", "name": "Паста с куриным фаршем в томатном соусе", "description": "Нутовая паста с куриным фаршем в томатном соусе", "photoEmoji": "🍝"},
+    {"id": "dinner_chicken_patties_mash", "name": "Котлеты из куриного фарша", "description": "Простые котлеты из куриного фарша", "photoEmoji": "🍗"},
+    {"id": "dinner_ostrich_chimichurri", "name": "Стейк из страусятины с чимичурри", "description": "Страусиный стейк на гриле с аргентинским соусом чимичурри и картофелем", "photoEmoji": "🥩"},
+    {"id": "dinner_pork_patties", "name": "Свиные котлеты", "description": "Простые сочные котлеты из свиного фарша", "photoEmoji": "🍖"}
   ];
 
   const DINNER_SIDES = [
@@ -291,7 +315,7 @@
     if (name) document.getElementById('greeting').textContent = `За что голосуем на завтра, ${name}?`;
   }
 
-  const selection = { breakfast: null, breakfastDessert: null, starter: null, main: null, side: null, dessert: null };
+  const selection = { breakfast: null, breakfastMeat: null, breakfastDessert: null, starter: null, main: null, side: null, dessert: null };
   const donenessPrefs = {};
 
   function buildPillRow(dishId, kind, options, panel) {
@@ -376,6 +400,7 @@
 
   fetchUnavailableDishes().then(unavailable => {
     renderGroup('breakfastList', BREAKFAST_DISHES, 'breakfast', unavailable);
+    renderGroup('breakfastMeatList', BREAKFAST_MEAT, 'breakfastMeat', unavailable);
     renderGroup('breakfastDessertList', DINNER_DESSERTS, 'breakfastDessert', unavailable);
     renderGroup('starterList', DINNER_STARTERS, 'starter', unavailable);
     renderGroup('mainList', DINNER_MAINS, 'main', unavailable);
@@ -414,6 +439,7 @@
       type: 'menu',
       breakfast: {
         main: pickWithDoneness(selection.breakfast),
+        meat: pickWithDoneness(selection.breakfastMeat),
         dessert: pickWithDoneness(selection.breakfastDessert),
       },
       dinner: {

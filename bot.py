@@ -503,7 +503,7 @@ def compute_daily_menu(responses):
     если никто не голосовал)."""
     breakfast = _tally_meal(
         [(r["name"], r.get("breakfast"), r.get("vote_weight", 1)) for r in responses.values()],
-        ("main", "dessert"),
+        ("main", "meat", "dessert"),
     )
     dinner = _tally_meal(
         [(r["name"], r.get("dinner"), r.get("vote_weight", 1)) for r in responses.values()],
@@ -590,10 +590,10 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         )
 
     sections = []
-    breakfast_labels = {"main": "Основное", "dessert": "Десерт"}
+    breakfast_labels = {"main": "Основное", "meat": "Мясное блюдо", "dessert": "Десерт"}
     if menu["breakfast"]:
         lines = ["## Завтрак"]
-        for course in ("main", "dessert"):
+        for course in ("main", "meat", "dessert"):
             if course in menu["breakfast"]:
                 item = menu["breakfast"][course]
                 lines.append(f"### {breakfast_labels[course]}")
@@ -651,6 +651,15 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         "признаки готовности) — это важно сохранить, а не пересказать короче. "
         "Твоя задача — только красиво оформить и сгруппировать, не редактируя "
         "содержание рецептов.\n\n"
+        "Представь, что объясняешь это дословно человеку, который вообще никогда "
+        "не готовил — как ребёнку, который первый раз стоит у плиты. Не пропускай "
+        "ни одной мелочи: сколько именно чего добавить, когда именно помешать, "
+        "как понять, что готово. Если в рецепте написано добавить какую-то "
+        "специю, зелень или приправу — обязательно укажи именно её, а не общее "
+        "«добавьте специи по вкусу». Ни в коем случае не пиши в самом сообщении "
+        "ничего о том, что инструкция упрощена или что повар неопытный — просто "
+        "дай чёткие, полные шаги, как есть, без всяких пояснений об уровне "
+        "сложности.\n\n"
         "Это шведский стол: каждое блюдо готовится одной большой порцией и "
         "подаётся на общей посуде (одна большая тарелка/миска/поднос), а не "
         "раскладывается по отдельным персональным тарелкам — люди накладывают "
