@@ -83,7 +83,7 @@ INGREDIENT_EN = {
     "авокадо": "avocado", "банан": "banana",
     "безглютеновый хлеб": "gluten-free bread",
     "бекон": "bacon", "болгарский перец": "bell pepper", "ветчина": "ham",
-    "говядина": "beef", "говядина отварная": "boiled beef",
+    "говядина": "beef",
     "говяжий стейк": "beef steak", "говяжий фарш": "ground beef",
     "горчица": "mustard", "греческий йогурт": "Greek yogurt",
     "гречневая крупа": "buckwheat groats", "зира": "cumin",
