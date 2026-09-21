@@ -695,7 +695,10 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     )
     chunks = [recipe_text[i : i + 3500] for i in range(0, len(recipe_text), 3500)]
     for chunk in chunks:
-        await context.bot.send_message(chat_id=COOK_CHAT_ID, text=chunk)
+        try:
+            await context.bot.send_message(chat_id=COOK_CHAT_ID, text=chunk)
+        except Exception as e:
+            logger.error(f"Не удалось отправить часть сообщения повару: {e}")
 
 
 async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
