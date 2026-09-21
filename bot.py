@@ -687,7 +687,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
 
     message = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=4000,
+        max_tokens=8000,
         messages=[{"role": "user", "content": prompt}],
     )
     recipe_text = "".join(
