@@ -693,6 +693,10 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     recipe_text = "".join(
         block.text for block in message.content if block.type == "text"
     )
+    logger.info(
+        f"Claude API: stop_reason={message.stop_reason}, "
+        f"длина ответа={len(recipe_text)} символов"
+    )
     chunks = [recipe_text[i : i + 3500] for i in range(0, len(recipe_text), 3500)]
     for chunk in chunks:
         try:
