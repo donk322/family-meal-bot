@@ -206,6 +206,18 @@
   </section>
 
   <section>
+    <h2>Гарнир на завтрак</h2>
+    <p class="optional-tag">Необязательно</p>
+    <div id="breakfastSideList"></div>
+  </section>
+
+  <section>
+    <h2>Суп на завтрак</h2>
+    <p class="optional-tag">Необязательно</p>
+    <div id="breakfastSoupList"></div>
+  </section>
+
+  <section>
     <h2>Десерт на завтрак</h2>
     <p class="optional-tag">Необязательно</p>
     <div id="breakfastDessertList"></div>
@@ -215,6 +227,12 @@
     <h2>Стартер</h2>
     <p class="optional-tag">Необязательно</p>
     <div id="starterList"></div>
+  </section>
+
+  <section>
+    <h2>Суп</h2>
+    <p class="optional-tag">Необязательно</p>
+    <div id="dinnerSoupList"></div>
   </section>
 
   <section>
@@ -276,13 +294,17 @@
     {"id": "dinner_starter_salmon_avocado", "name": "Салат с лососем и авокадо", "description": "Слабосолёный лосось с авокадо, огурцом и лимоном", "photoEmoji": "🐟"},
     {"id": "dinner_starter_chicken_veg_salad", "name": "Салат с курицей и овощами", "description": "Куриное филе на гриле с огурцом, помидором и перцем", "photoEmoji": "🥗"},
     {"id": "dinner_starter_thai_beef_salad", "name": "Тайский салат с говядиной", "description": "Тонко нарезанный стейк с лаймом, луком и свежей зеленью", "photoEmoji": "🥩"},
+    {"id": "dinner_starter_keto_avocado_egg", "name": "Кето-боул с авокадо и яйцом", "description": "Авокадо с яйцом и хрустящим беконом, без углеводов", "photoEmoji": "🥑"}
+  ];
+
+  const SOUPS = [
     {"id": "dinner_starter_mushroom_soup", "name": "Крем-суп из шампиньонов", "description": "Нежный крем-суп из шампиньонов со сливками", "photoEmoji": "🍲"},
     {"id": "dinner_starter_chicken_broth_soup", "name": "Куриный суп на бульоне", "description": "Лёгкий куриный суп с морковью и луком", "photoEmoji": "🍲"},
-    {"id": "dinner_starter_keto_avocado_egg", "name": "Кето-боул с авокадо и яйцом", "description": "Авокадо с яйцом и хрустящим беконом, без углеводов", "photoEmoji": "🥑"},
     {"id": "dinner_starter_borscht", "name": "Борщ со свёклой и говядиной", "description": "Классический борщ на говяжьем бульоне со свёклой", "photoEmoji": "🍲"},
     {"id": "dinner_starter_tomato_soup", "name": "Томатный суп", "description": "Простой ароматный суп на томатной пасте с чесноком", "photoEmoji": "🍲"},
     {"id": "dinner_starter_fish_soup", "name": "Рыбный суп", "description": "Лёгкий суп из белой рыбы с картофелем и морковью", "photoEmoji": "🍲"}
   ];
+
 
   const DINNER_MAINS = [
     {"id": "dinner_grilled_chicken_veg", "name": "Курица с овощами на гриле", "description": "Куриное филе на гриле с цукини и болгарским перцем", "photoEmoji": "🍗"},
@@ -322,7 +344,7 @@
     if (name) document.getElementById('greeting').textContent = `За что голосуем на завтра, ${name}?`;
   }
 
-  const selection = { breakfast: null, breakfastMeat: null, breakfastDessert: null, starter: null, main: null, side: null, dessert: null };
+  const selection = { breakfast: null, breakfastMeat: null, breakfastSide: null, breakfastSoup: null, breakfastDessert: null, starter: null, soup: null, main: null, side: null, dessert: null };
   const donenessPrefs = {};
 
   function buildPillRow(dishId, kind, options, panel) {
@@ -408,8 +430,11 @@
   fetchUnavailableDishes().then(unavailable => {
     renderGroup('breakfastList', BREAKFAST_DISHES, 'breakfast', unavailable);
     renderGroup('breakfastMeatList', BREAKFAST_MEAT, 'breakfastMeat', unavailable);
+    renderGroup('breakfastSideList', DINNER_SIDES, 'breakfastSide', unavailable);
+    renderGroup('breakfastSoupList', SOUPS, 'breakfastSoup', unavailable);
     renderGroup('breakfastDessertList', DINNER_DESSERTS, 'breakfastDessert', unavailable);
     renderGroup('starterList', DINNER_STARTERS, 'starter', unavailable);
+    renderGroup('dinnerSoupList', SOUPS, 'soup', unavailable);
     renderGroup('mainList', DINNER_MAINS, 'main', unavailable);
     renderGroup('sideList', DINNER_SIDES, 'side', unavailable);
     renderGroup('dessertList', DINNER_DESSERTS, 'dessert', unavailable);
@@ -463,10 +488,13 @@
       breakfast: {
         main: pickWithDoneness(selection.breakfast),
         meat: pickWithDoneness(selection.breakfastMeat),
+        side: pickWithDoneness(selection.breakfastSide),
+        soup: pickWithDoneness(selection.breakfastSoup),
         dessert: pickWithDoneness(selection.breakfastDessert),
       },
       dinner: {
         starter: pickWithDoneness(selection.starter),
+        soup: pickWithDoneness(selection.soup),
         main: pickWithDoneness(selection.main),
         side: pickWithDoneness(selection.side),
         dessert: pickWithDoneness(selection.dessert),

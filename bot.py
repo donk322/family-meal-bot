@@ -389,13 +389,13 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
     breakfast_raw = data.get("breakfast") or {}
     breakfast_pick = {
         course: valid_pick(breakfast_raw.get(course))
-        for course in ("main", "meat", "dessert")
+        for course in ("main", "meat", "side", "soup", "dessert")
     }
 
     dinner_raw = data.get("dinner") or {}
     dinner_pick = {
         course: valid_pick(dinner_raw.get(course))
-        for course in ("starter", "main", "side", "dessert")
+        for course in ("starter", "soup", "main", "side", "dessert")
     }
 
     vote_weight = (
@@ -507,11 +507,11 @@ def compute_daily_menu(responses):
     если никто не голосовал)."""
     breakfast = _tally_meal(
         [(r["name"], r.get("breakfast"), r.get("vote_weight", 1)) for r in responses.values()],
-        ("main", "meat", "dessert"),
+        ("main", "meat", "side", "soup", "dessert"),
     )
     dinner = _tally_meal(
         [(r["name"], r.get("dinner"), r.get("vote_weight", 1)) for r in responses.values()],
-        ("starter", "main", "side", "dessert"),
+        ("starter", "soup", "main", "side", "dessert"),
     )
     return {"breakfast": breakfast, "dinner": dinner}
 
@@ -594,20 +594,26 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         )
 
     sections = []
-    breakfast_labels = {"main": "Основное", "meat": "Мясное блюдо", "dessert": "Десерт"}
+    breakfast_labels = {
+        "main": "Основное", "meat": "Мясное блюдо",
+        "side": "Гарнир", "soup": "Суп", "dessert": "Десерт",
+    }
     if menu["breakfast"]:
         lines = ["## Завтрак"]
-        for course in ("main", "meat", "dessert"):
+        for course in ("main", "meat", "side", "soup", "dessert"):
             if course in menu["breakfast"]:
                 item = menu["breakfast"][course]
                 lines.append(f"### {breakfast_labels[course]}")
                 lines.append(format_dish_block(item["dish_id"], item["portions"], item["voters"]))
         sections.append("\n\n".join(lines))
 
-    dinner_labels = {"starter": "Стартер", "main": "Основное", "side": "Гарнир", "dessert": "Десерт"}
+    dinner_labels = {
+        "starter": "Стартер", "soup": "Суп", "main": "Основное",
+        "side": "Гарнир", "dessert": "Десерт",
+    }
     if menu["dinner"]:
         lines = ["## Ужин"]
-        for course in ("starter", "main", "side", "dessert"):
+        for course in ("starter", "soup", "main", "side", "dessert"):
             if course in menu["dinner"]:
                 item = menu["dinner"][course]
                 lines.append(f"### {dinner_labels[course]}")

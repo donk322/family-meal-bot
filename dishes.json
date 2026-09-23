@@ -1951,7 +1951,7 @@
   "dinner_starter_mushroom_soup": {
     "name": "Крем-суп из шампиньонов",
     "meal_type": "dinner",
-    "course": "starter",
+    "course": "soup",
     "description": "Нежный крем-суп из шампиньонов со сливками",
     "ingredients": [
       {
@@ -2001,7 +2001,7 @@
   "dinner_starter_chicken_broth_soup": {
     "name": "Куриный суп на бульоне",
     "meal_type": "dinner",
-    "course": "starter",
+    "course": "soup",
     "description": "Лёгкий куриный суп с морковью и луком",
     "ingredients": [
       {
@@ -2138,7 +2138,7 @@
   "dinner_starter_borscht": {
     "name": "Борщ со свёклой и говядиной",
     "meal_type": "dinner",
-    "course": "starter",
+    "course": "soup",
     "description": "Классический борщ на говяжьем бульоне со свёклой",
     "ingredients": [
       {
@@ -2188,7 +2188,7 @@
   "dinner_starter_tomato_soup": {
     "name": "Томатный суп",
     "meal_type": "dinner",
-    "course": "starter",
+    "course": "soup",
     "description": "Простой ароматный суп на томатной пасте с чесноком",
     "ingredients": [
       {
@@ -2231,7 +2231,7 @@
   "dinner_starter_fish_soup": {
     "name": "Рыбный суп",
     "meal_type": "dinner",
-    "course": "starter",
+    "course": "soup",
     "description": "Лёгкий суп из белой рыбы с картофелем и морковью",
     "ingredients": [
       {
