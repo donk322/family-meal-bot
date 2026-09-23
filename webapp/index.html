@@ -201,8 +201,8 @@
 
   <section>
     <h2>Мясное блюдо</h2>
-    <p class="optional-tag">Необязательно</p>
     <div id="breakfastMeatList"></div>
+    <p class="error" id="breakfastMeatErr">Выбери мясное блюдо на завтрак</p>
   </section>
 
   <section>
@@ -225,8 +225,8 @@
 
   <section>
     <h2>Гарнир</h2>
-    <p class="optional-tag">Необязательно</p>
     <div id="sideList"></div>
+    <p class="error" id="sideErr">Выбери гарнир на ужин</p>
   </section>
 
   <section>
@@ -261,8 +261,9 @@
 
   const BREAKFAST_MEAT = [
     {"id": "breakfast_chicken_thigh_pan", "name": "Куриные бёдра на сковороде", "description": "Сочное куриное бедро с хрустящей корочкой", "photoEmoji": "🍗"},
-    {"id": "breakfast_meat_patties", "name": "Мясные котлеты (без панировки)", "description": "Простые сытные говяжьи котлеты без панировки", "photoEmoji": "🥩"},
-    {"id": "breakfast_steak_ham_cheese", "name": "Стейк с ветчиной и сыром", "description": "Стейк, покрытый ветчиной и расплавленным сыром", "photoEmoji": "🥩"}
+    {"id": "breakfast_steak_ham_cheese", "name": "Стейк с ветчиной и сыром", "description": "Стейк, покрытый ветчиной и расплавленным сыром", "photoEmoji": "🥩"},
+    {"id": "breakfast_sausages_onions", "name": "Колбаски с жареным луком", "description": "Жареные колбаски со сладким карамелизированным луком", "photoEmoji": "🌭"},
+    {"id": "breakfast_bacon_chicken_bites", "name": "Куриные кусочки в беконе", "description": "Кусочки куриного филе, обёрнутые беконом и обжаренные до хруста", "photoEmoji": "🥓"}
   ];
 
   const DINNER_STARTERS = [
@@ -274,7 +275,13 @@
     {"id": "dinner_starter_tomato_herbs", "name": "Помидоры с зеленью", "description": "Нарезанные помидоры с оливковым маслом и петрушкой", "photoEmoji": "🍅"},
     {"id": "dinner_starter_salmon_avocado", "name": "Салат с лососем и авокадо", "description": "Слабосолёный лосось с авокадо, огурцом и лимоном", "photoEmoji": "🐟"},
     {"id": "dinner_starter_chicken_veg_salad", "name": "Салат с курицей и овощами", "description": "Куриное филе на гриле с огурцом, помидором и перцем", "photoEmoji": "🥗"},
-    {"id": "dinner_starter_thai_beef_salad", "name": "Тайский салат с говядиной", "description": "Тонко нарезанный стейк с лаймом, луком и свежей зеленью", "photoEmoji": "🥩"}
+    {"id": "dinner_starter_thai_beef_salad", "name": "Тайский салат с говядиной", "description": "Тонко нарезанный стейк с лаймом, луком и свежей зеленью", "photoEmoji": "🥩"},
+    {"id": "dinner_starter_mushroom_soup", "name": "Крем-суп из шампиньонов", "description": "Нежный крем-суп из шампиньонов со сливками", "photoEmoji": "🍲"},
+    {"id": "dinner_starter_chicken_broth_soup", "name": "Куриный суп на бульоне", "description": "Лёгкий куриный суп с морковью и луком", "photoEmoji": "🍲"},
+    {"id": "dinner_starter_keto_avocado_egg", "name": "Кето-боул с авокадо и яйцом", "description": "Авокадо с яйцом и хрустящим беконом, без углеводов", "photoEmoji": "🥑"},
+    {"id": "dinner_starter_borscht", "name": "Борщ со свёклой и говядиной", "description": "Классический борщ на говяжьем бульоне со свёклой", "photoEmoji": "🍲"},
+    {"id": "dinner_starter_tomato_soup", "name": "Томатный суп", "description": "Простой ароматный суп на томатной пасте с чесноком", "photoEmoji": "🍲"},
+    {"id": "dinner_starter_fish_soup", "name": "Рыбный суп", "description": "Лёгкий суп из белой рыбы с картофелем и морковью", "photoEmoji": "🍲"}
   ];
 
   const DINNER_MAINS = [
@@ -416,7 +423,9 @@
 
   function submit() {
     const breakfastErr = document.getElementById('breakfastErr');
+    const breakfastMeatErr = document.getElementById('breakfastMeatErr');
     const mainErr = document.getElementById('mainErr');
+    const sideErr = document.getElementById('sideErr');
     let ok = true;
 
     if (!selection.breakfast) {
@@ -426,11 +435,25 @@
       breakfastErr.style.display = 'none';
     }
 
+    if (!selection.breakfastMeat) {
+      breakfastMeatErr.style.display = 'block';
+      ok = false;
+    } else {
+      breakfastMeatErr.style.display = 'none';
+    }
+
     if (!selection.main) {
       mainErr.style.display = 'block';
       ok = false;
     } else {
       mainErr.style.display = 'none';
+    }
+
+    if (!selection.side) {
+      sideErr.style.display = 'block';
+      ok = false;
+    } else {
+      sideErr.style.display = 'none';
     }
 
     if (!ok) return;

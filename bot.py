@@ -49,7 +49,7 @@ LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "8"))
 
 # Extra portions to cook on top of the number of people who voted, as a
 # buffer for seconds.
-PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "1"))
+PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "3"))
 
 # /whatstobuy reports shortfall for a full family-size batch, not one serving.
 WHATSTOBUY_SERVINGS = int(os.environ.get("WHATSTOBUY_SERVINGS", "8"))
@@ -389,7 +389,7 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
     breakfast_raw = data.get("breakfast") or {}
     breakfast_pick = {
         course: valid_pick(breakfast_raw.get(course))
-        for course in ("main", "dessert")
+        for course in ("main", "meat", "dessert")
     }
 
     dinner_raw = data.get("dinner") or {}
