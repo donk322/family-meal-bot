@@ -378,61 +378,73 @@ async def stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if len(args) < 3:
+    full_text = update.message.text or ""
+    # Убираем саму команду "/addstock" из первой строки, если она там есть
+    lines = [full_text.split("\n", 1)[0].replace("/addstock", "", 1).strip()] \
+            + full_text.split("\n")[1:]
+    # Каждая последующая строка может начинаться с "/addstock" (если
+    # человек скопировал несколько готовых команд) — убираем это тоже
+    lines = [ln.replace("/addstock", "", 1).strip() if ln.strip().startswith("/addstock") else ln.strip()
+             for ln in lines]
+    lines = [ln for ln in lines if ln]  # убираем пустые строки
+
+    if not lines:
         await update.message.reply_text(
             "Usage: /addstock <product> <amount> <unit>\n"
-            "Example: /addstock tomato 200 g"
+            "Example: /addstock tomato 200 g\n"
+            "You can also paste several lines at once, one product per line."
         )
         return
 
-    try:
-        amount = float(args[-2])
-    except ValueError:
-        await update.message.reply_text(
-            "Couldn't read the amount. Usage: /addstock <product> <amount> <unit>\n"
-            "Example: /addstock tomato 200 g"
-        )
-        return
+    results = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3:
+            results.append(f"Skipped (couldn't read): {line}")
+            continue
+        try:
+            amount = float(parts[-2])
+        except ValueError:
+            results.append(f"Skipped (couldn't read amount): {line}")
+            continue
 
-    unit_en_raw = args[-1].lower()
-    name_en = " ".join(args[:-2]).strip()
+        unit_en_raw = parts[-1].lower()
+        name_en = " ".join(parts[:-2]).strip()
 
-    EN_TO_RU_UNIT = {"g": "г", "kg": "кг", "ml": "мл", "l": "л", "pcs": "шт", "pc": "шт", "шт": "шт"}
-    unit_ru = EN_TO_RU_UNIT.get(unit_en_raw, unit_en_raw)
+        EN_TO_RU_UNIT = {"g": "г", "kg": "кг", "ml": "мл", "l": "л", "pcs": "шт", "pc": "шт"}
+        unit_ru = EN_TO_RU_UNIT.get(unit_en_raw, unit_en_raw)
 
-    # Ищем среди уже известных переводов — совпадает ли введённое название
-    # (без учёта регистра) с чем-то, что уже есть в системе
-    ru_key = None
-    for ru_name, en_name in INGREDIENT_EN.items():
-        if en_name.lower() == name_en.lower():
-            ru_key = ru_name
-            break
+        ru_key = None
+        for ru_name, en_name in INGREDIENT_EN.items():
+            if en_name.lower() == name_en.lower():
+                ru_key = ru_name
+                break
 
+        inventory = load_inventory()
+        key = ru_key if ru_key else name_en
+        store_unit = unit_ru if ru_key else unit_en_raw
+        existing = inventory.get(key, {"amount": 0, "unit": store_unit})
+        existing["amount"] = round(existing.get("amount", 0) + amount, 2)
+        existing["unit"] = store_unit
+        inventory[key] = existing
+        save_inventory(inventory)
+
+        results.append(f"Added {amount} {unit_en_raw} of {name_en}. Total now: {existing['amount']} {unit_en_raw}.")
+
+    await update.message.reply_text("\n".join(results))
+
+
+async def removestock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args).strip()
     inventory = load_inventory()
-
-    if ru_key:
-        # Известный продукт — складываем с тем, что уже есть, под русским ключом
-        existing = inventory.get(ru_key, {"amount": 0, "unit": unit_ru})
-        existing["amount"] = round(existing.get("amount", 0) + amount, 2)
-        existing["unit"] = unit_ru
-        inventory[ru_key] = existing
-        total = existing["amount"]
-        display_name = name_en
-    else:
-        # Новый, ранее неизвестный продукт — заводим под тем именем, как ввели
-        existing = inventory.get(name_en, {"amount": 0, "unit": unit_en_raw})
-        existing["amount"] = round(existing.get("amount", 0) + amount, 2)
-        existing["unit"] = unit_en_raw
-        inventory[name_en] = existing
-        total = existing["amount"]
-        display_name = name_en
-
+    # Ищем без учёта регистра
+    match = next((k for k in inventory if k.lower() == name.lower()), None)
+    if not match:
+        await update.message.reply_text(f"Couldn't find '{name}' in stock.")
+        return
+    del inventory[match]
     save_inventory(inventory)
-
-    await update.message.reply_text(
-        f"Added {amount} {unit_en_raw} of {display_name}. Total now: {total} {unit_en_raw}."
-    )
+    await update.message.reply_text(f"Removed '{match}' from stock.")
 
 
 async def updatestock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -956,6 +968,7 @@ def main():
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("stock", stock))
     app.add_handler(CommandHandler("addstock", addstock))
+    app.add_handler(CommandHandler("removestock", removestock))
     app.add_handler(CommandHandler("updatestock", updatestock_cmd))
     app.add_handler(CommandHandler("restock", restock))
     app.add_handler(CommandHandler("whatstobuy", whatstobuy_cmd))
