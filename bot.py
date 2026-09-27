@@ -71,6 +71,7 @@ TODAY_MENU_CACHE_FILE = DATA_DIR / "generated_dishes.json"
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 DISHES = json.loads(DISHES_FILE.read_text())
+DISHES_GENERATED_DATE = None  # строка "YYYY-MM-DD" или None, если ни разу не генерировалось в эту сессию
 if TODAY_MENU_CACHE_FILE.exists():
     try:
         DISHES = json.loads(TODAY_MENU_CACHE_FILE.read_text())
@@ -260,6 +261,9 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
     except json.JSONDecodeError as e:
         logger.error(f"Не удалось распарсить сгенерированное меню: {e}. Оставляю прошлый DISHES.")
         return
+
+    global DISHES_GENERATED_DATE
+    DISHES_GENERATED_DATE = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
 
     DISHES = generated
     save_json(TODAY_MENU_CACHE_FILE, DISHES)
@@ -927,7 +931,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/menu-today":
-            result = {"breakfast": {}, "dinner": {}}
+            result = {"breakfast": {}, "dinner": {}, "generated_date": DISHES_GENERATED_DATE}
             for dish_id, dish in DISHES.items():
                 meal = dish.get("meal_type")
                 if meal not in result:
