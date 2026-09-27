@@ -44,9 +44,7 @@
     opacity: 0.5;
     margin: 20px 0 24px;
   }
-  section {
-    margin-bottom: 28px;
-  }
+  section { margin-bottom: 28px; }
   h2 {
     font-family: var(--heading-font);
     font-size: 18px;
@@ -62,276 +60,90 @@
   }
   .dish-card {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
     border: 1px solid var(--tg-theme-hint-color, #e2e2e2);
     border-radius: 12px;
-    padding: 8px;
+    padding: 12px;
     margin-bottom: 8px;
     cursor: pointer;
     background: var(--tg-theme-bg-color, #ffffff);
     transition: border-color 0.15s ease, background 0.15s ease;
   }
-  .dish-card.selected {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-  }
-  .dish-card.unavailable {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-  .dish-card.unavailable .dish-photo,
-  .dish-card.unavailable .dish-photo-fallback {
-    filter: grayscale(1);
-  }
-  .unavailable-label {
-    font-size: 11px;
-    color: #c0392b;
-    font-weight: 500;
-    margin: 2px 0 0;
-  }
-  .dish-photo {
-    width: 52px;
-    height: 52px;
-    border-radius: 10px;
-    flex-shrink: 0;
-    object-fit: cover;
-    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
-  }
-  .dish-photo-fallback {
-    width: 52px;
-    height: 52px;
-    border-radius: 10px;
-    flex-shrink: 0;
-    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-  }
-  .dish-name {
-    font-size: 14px;
-    font-weight: 500;
-    margin: 0 0 2px;
-  }
-  .dish-desc {
-    font-size: 12px;
-    color: var(--tg-theme-hint-color, #8a8a8a);
-    margin: 0;
-  }
+  .dish-card.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .dish-card.unavailable { opacity: 0.45; cursor: not-allowed; }
+  .dish-emoji { font-size: 26px; line-height: 1; flex-shrink: 0; margin-top: 2px; }
+  .dish-name { font-size: 14px; font-weight: 500; margin: 0 0 2px; }
+  .dish-desc { font-size: 12px; color: var(--tg-theme-hint-color, #8a8a8a); margin: 0; }
+  .unavailable-label { font-size: 11px; color: #c0392b; font-weight: 500; margin: 2px 0 0; }
   label.notes-label {
-    display: block;
-    font-family: var(--heading-font);
-    font-size: 18px;
-    font-style: italic;
-    color: var(--accent);
-    margin-bottom: 10px;
+    display: block; font-family: var(--heading-font); font-size: 18px; font-style: italic;
+    color: var(--accent); margin-bottom: 10px;
   }
   textarea {
-    width: 100%;
-    min-height: 56px;
-    border-radius: 12px;
+    width: 100%; min-height: 56px; border-radius: 12px;
     border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
     background: var(--tg-theme-secondary-bg-color, #f5f5f5);
     color: var(--tg-theme-text-color, #1c1c1c);
-    padding: 12px 14px;
-    font-size: 15px;
-    font-family: inherit;
-    resize: vertical;
+    padding: 12px 14px; font-size: 15px; font-family: inherit; resize: vertical;
   }
-  textarea:focus {
-    outline: none;
-    border-color: var(--accent);
-  }
-  .error {
-    color: #c0392b;
-    font-size: 13px;
-    margin-top: 4px;
-    display: none;
-  }
-  .footnote {
-    font-size: 12px;
-    color: var(--tg-theme-hint-color, #999);
-    text-align: center;
-    margin-top: 8px;
-  }
-  .doneness-panel {
-    padding: 4px 8px 10px 68px;
-    margin: -8px 0 8px;
-  }
-  .doneness-label {
-    font-size: 12px;
-    color: var(--tg-theme-hint-color, #8a8a8a);
-    margin: 6px 0 6px;
-  }
-  .pill-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 4px;
-  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  .error { color: #c0392b; font-size: 13px; margin-top: 4px; display: none; }
+  .footnote { font-size: 12px; color: var(--tg-theme-hint-color, #999); text-align: center; margin-top: 8px; }
+  .doneness-panel { padding: 4px 8px 10px 46px; margin: -8px 0 8px; }
+  .doneness-label { font-size: 12px; color: var(--tg-theme-hint-color, #8a8a8a); margin: 6px 0 6px; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
   .pill {
-    border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
-    color: var(--tg-theme-text-color, #1c1c1c);
-    background: transparent;
-    border-radius: 16px;
-    padding: 5px 12px;
-    font-size: 12px;
-    cursor: pointer;
+    border: 1px solid var(--tg-theme-hint-color, #d8d8d8); color: var(--tg-theme-text-color, #1c1c1c);
+    background: transparent; border-radius: 16px; padding: 5px 12px; font-size: 12px; cursor: pointer;
   }
-  .pill.selected {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-weight: 500;
-  }
+  .pill.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+  .loading { text-align: center; padding: 60px 20px; color: var(--tg-theme-hint-color, #999); }
+  .empty-note { font-size: 12px; color: var(--tg-theme-hint-color, #999); font-style: italic; }
 </style>
 </head>
 <body>
-  <p class="kicker">Голосование за меню</p>
-  <h1 id="greeting">За что голосуем на завтра?</h1>
-  <p class="sub">Выбери по одному варианту в каждом разделе — побеждают самые популярные, повар готовит только победителей.</p>
-  <hr class="rule">
-
-  <section>
-    <h2>Завтрак</h2>
-    <div id="breakfastList"></div>
-    <p class="error" id="breakfastErr">Выбери что-нибудь на завтрак</p>
-  </section>
-
-  <section>
-    <h2>Мясное блюдо</h2>
-    <div id="breakfastMeatList"></div>
-    <p class="error" id="breakfastMeatErr">Выбери мясное блюдо на завтрак</p>
-  </section>
-
-  <section>
-    <h2>Гарнир на завтрак</h2>
-    <p class="optional-tag">Необязательно</p>
-    <div id="breakfastSideList"></div>
-  </section>
-
-  <section>
-    <h2>Суп на завтрак</h2>
-    <p class="optional-tag">Необязательно</p>
-    <div id="breakfastSoupList"></div>
-  </section>
-
-  <section>
-    <h2>Десерт на завтрак</h2>
-    <p class="optional-tag">Необязательно</p>
-    <div id="breakfastDessertList"></div>
-  </section>
-
-  <section>
-    <h2>Стартер</h2>
-    <p class="optional-tag">Необязательно</p>
-    <div id="starterList"></div>
-  </section>
-
-  <section>
-    <h2>Суп</h2>
-    <p class="optional-tag">Необязательно</p>
-    <div id="dinnerSoupList"></div>
-  </section>
-
-  <section>
-    <h2>Основное блюдо</h2>
-    <div id="mainList"></div>
-    <p class="error" id="mainErr">Выбери основное блюдо на ужин</p>
-  </section>
-
-  <section>
-    <h2>Гарнир</h2>
-    <div id="sideList"></div>
-    <p class="error" id="sideErr">Выбери гарнир на ужин</p>
-  </section>
-
-  <section>
-    <h2>Десерт</h2>
-    <p class="optional-tag">Необязательно</p>
-    <div id="dessertList"></div>
-  </section>
-
-  <section>
-    <label class="notes-label" for="notes">Комментарии</label>
-    <textarea id="notes" placeholder="Аллергии, нелюбимые продукты, гости и т.д. (необязательно)"></textarea>
-  </section>
-
-  <p class="footnote">Все блюда в меню без глютена</p>
+  <div id="loading" class="loading">Готовим сегодняшнее меню…</div>
+  <div id="app" style="display:none">
+    <p class="kicker">Голосование за меню</p>
+    <h1 id="greeting">За что голосуем на завтра?</h1>
+    <p class="sub">Меню сегодня придумано под то, что реально есть на кухне — выбери по одному варианту в каждом разделе, побеждают самые популярные.</p>
+    <hr class="rule">
+    <div id="sections"></div>
+    <section>
+      <label class="notes-label" for="notes">Комментарии</label>
+      <textarea id="notes" placeholder="Аллергии, нелюбимые продукты, гости и т.д. (необязательно)"></textarea>
+    </section>
+    <p class="footnote">Все блюда в меню без глютена</p>
+  </div>
 
 <script>
   const API_BASE_URL = 'https://family-meal-bot-er5p.onrender.com';
 
-  const BREAKFAST_DISHES = [
-    {"id": "breakfast_bacon_eggs", "name": "Яичница с беконом", "description": "Самый простой и любимый завтрак — яйца и хрустящий бекон", "photoEmoji": "🍳", "customize": ["egg"]},
-    {"id": "breakfast_english", "name": "Английский завтрак", "description": "Яйца, бекон, колбаски и помидор — всё на одной тарелке", "photoEmoji": "🍳", "customize": ["egg"]},
-    {"id": "breakfast_eggs_benedict", "name": "Яйца Бенедикт", "description": "Пашот и голландский соус на вашем безглютеновом тосте с ветчиной", "photoEmoji": "🍳", "customize": ["egg"]},
-    {"id": "breakfast_ham_cheese_omelette", "name": "Омлет с ветчиной и сыром", "description": "Классический сытный омлет с ветчиной и расплавленным сыром", "photoEmoji": "🍳"},
-    {"id": "breakfast_steak_eggs", "name": "Стейк с яичницей", "description": "Сочный стейк и два яйца с жидким желтком", "photoEmoji": "🥩", "customize": ["egg", "meat"]},
-    {"id": "breakfast_shakshuka", "name": "Шакшука", "description": "Яйца, запечённые в пряном томатном соусе с перцем", "photoEmoji": "🍳"},
-    {"id": "breakfast_potato_bacon_frittata", "name": "Фриттата с картофелем и беконом", "description": "Запечённый омлет с картофелем, беконом и сыром", "photoEmoji": "🍳"},
-    {"id": "breakfast_salmon_scramble_toast", "name": "Скрэмбл с лососем на тосте", "description": "Нежный скрэмбл и слабосолёный лосось на безглютеновом тосте", "photoEmoji": "🐟"},
-    {"id": "breakfast_avocado_toast_egg", "name": "Авокадо-тост с яйцом пашот", "description": "Тост с авокадо и яйцом пашот на вашем безглютеновом хлебе", "photoEmoji": "🥑"},
-    {"id": "breakfast_beef_hash_egg", "name": "Хэш с говядиной и яйцом", "description": "Обжаренный картофель с говядиной и яйцом сверху", "photoEmoji": "🍳"},
-    {"id": "breakfast_buckwheat_porridge", "name": "Гречневая каша", "description": "Простая гречневая каша на молоке со сливочным маслом", "photoEmoji": "🥣"}
-  ];
-
-  const BREAKFAST_MEAT = [
-    {"id": "breakfast_chicken_thigh_pan", "name": "Куриные бёдра на сковороде", "description": "Сочное куриное бедро с хрустящей корочкой", "photoEmoji": "🍗"},
-    {"id": "breakfast_steak_ham_cheese", "name": "Стейк с ветчиной и сыром", "description": "Стейк, покрытый ветчиной и расплавленным сыром", "photoEmoji": "🥩"},
-    {"id": "breakfast_sausages_onions", "name": "Колбаски с жареным луком", "description": "Жареные колбаски со сладким карамелизированным луком", "photoEmoji": "🌭"},
-    {"id": "breakfast_bacon_chicken_bites", "name": "Куриные кусочки в беконе", "description": "Кусочки куриного филе, обёрнутые беконом и обжаренные до хруста", "photoEmoji": "🥓"}
-  ];
-
-  const DINNER_STARTERS = [
-    {"id": "dinner_starter_greek_salad", "name": "Греческий салат", "description": "Огурцы, помидоры, перец и сыр с оливковым маслом", "photoEmoji": "🥗"},
-    {"id": "dinner_starter_vinegret", "name": "Винегрет", "description": "Классический салат из свёклы, картофеля, моркови и солёных огурцов", "photoEmoji": "🥗"},
-    {"id": "dinner_starter_veg_plate", "name": "Овощная нарезка", "description": "Свежие огурцы, помидоры и перец", "photoEmoji": "🥒"},
-    {"id": "dinner_starter_guacamole", "name": "Гуакамоле", "description": "Классическое мексиканское пюре из авокадо", "photoEmoji": "🥑"},
-    {"id": "dinner_starter_carrot_salad", "name": "Морковный салат", "description": "Простой салат из тёртой моркови с чесноком", "photoEmoji": "🥕"},
-    {"id": "dinner_starter_tomato_herbs", "name": "Помидоры с зеленью", "description": "Нарезанные помидоры с оливковым маслом и петрушкой", "photoEmoji": "🍅"},
-    {"id": "dinner_starter_salmon_avocado", "name": "Салат с лососем и авокадо", "description": "Слабосолёный лосось с авокадо, огурцом и лимоном", "photoEmoji": "🐟"},
-    {"id": "dinner_starter_chicken_veg_salad", "name": "Салат с курицей и овощами", "description": "Куриное филе на гриле с огурцом, помидором и перцем", "photoEmoji": "🥗"},
-    {"id": "dinner_starter_thai_beef_salad", "name": "Тайский салат с говядиной", "description": "Тонко нарезанный стейк с лаймом, луком и свежей зеленью", "photoEmoji": "🥩"},
-    {"id": "dinner_starter_keto_avocado_egg", "name": "Кето-боул с авокадо и яйцом", "description": "Авокадо с яйцом и хрустящим беконом, без углеводов", "photoEmoji": "🥑"}
-  ];
-
-  const SOUPS = [
-    {"id": "dinner_starter_mushroom_soup", "name": "Крем-суп из шампиньонов", "description": "Нежный крем-суп из шампиньонов со сливками", "photoEmoji": "🍲"},
-    {"id": "dinner_starter_chicken_broth_soup", "name": "Куриный суп на бульоне", "description": "Лёгкий куриный суп с морковью и луком", "photoEmoji": "🍲"},
-    {"id": "dinner_starter_borscht", "name": "Борщ со свёклой и говядиной", "description": "Классический борщ на говяжьем бульоне со свёклой", "photoEmoji": "🍲"},
-    {"id": "dinner_starter_tomato_soup", "name": "Томатный суп", "description": "Простой ароматный суп на томатной пасте с чесноком", "photoEmoji": "🍲"},
-    {"id": "dinner_starter_fish_soup", "name": "Рыбный суп", "description": "Лёгкий суп из белой рыбы с картофелем и морковью", "photoEmoji": "🍲"}
-  ];
-
-
-  const DINNER_MAINS = [
-    {"id": "dinner_grilled_chicken_veg", "name": "Курица с овощами на гриле", "description": "Куриное филе на гриле с цукини и болгарским перцем", "photoEmoji": "🍗"},
-    {"id": "dinner_beef_stroganoff_rice", "name": "Бефстроганов с рисом", "description": "Говядина в сливочном соусе с грибами, подаётся с рисом", "photoEmoji": "🍲", "customize": ["meat"]},
-    {"id": "dinner_baked_salmon_potato", "name": "Лосось запечённый с картофелем", "description": "Филе лосося с картофелем, лимоном и укропом", "photoEmoji": "🐟"},
-    {"id": "dinner_mushroom_risotto", "name": "Ризотто с грибами", "description": "Кремовое ризотто на рисе арборио с шампиньонами", "photoEmoji": "🍚"},
-    {"id": "dinner_beef_tacos_corn", "name": "Тако с говяжьим фаршем на кукурузных тако-шеллах", "description": "Хрустящие кукурузные тако-шеллы с говяжьим фаршем, авокадо и специями", "photoEmoji": "🌮"},
-    {"id": "dinner_chicken_souvlaki_tzatziki", "name": "Куриный сувлаки с дзадзики", "description": "Куриные шашлычки на гриле с соусом дзадзики и рисом", "photoEmoji": "🍗"},
-    {"id": "dinner_steak_chimichurri", "name": "Стейк с чимичурри", "description": "Говядина на гриле с аргентинским соусом чимичурри и картофелем", "photoEmoji": "🥩", "customize": ["meat"]},
-    {"id": "dinner_chicken_plov", "name": "Плов с курицей", "description": "Ароматный плов с куриным бедром, морковью и специями", "photoEmoji": "🍛"},
-    {"id": "dinner_beef_buckwheat_stew", "name": "Тушёная говядина с гречкой", "description": "Мягкая тушёная говядина с рассыпчатой гречневой кашей", "photoEmoji": "🍲"},
-    {"id": "dinner_fish_cutlets_mash", "name": "Рыбные котлеты с картофельным пюре", "description": "Нежные котлеты из белой рыбы с пюре из картофеля", "photoEmoji": "🐟"},
-    {"id": "dinner_chicken_mince_pasta", "name": "Паста с куриным фаршем в томатном соусе", "description": "Нутовая паста с куриным фаршем в томатном соусе", "photoEmoji": "🍝"},
-    {"id": "dinner_chicken_patties_mash", "name": "Котлеты из куриного фарша", "description": "Простые котлеты из куриного фарша", "photoEmoji": "🍗"},
-    {"id": "dinner_ostrich_chimichurri", "name": "Стейк из страусятины с чимичурри", "description": "Страусиный стейк на гриле с аргентинским соусом чимичурри и картофелем", "photoEmoji": "🥩"},
-    {"id": "dinner_pork_patties", "name": "Свиные котлеты", "description": "Простые сочные котлеты из свиного фарша", "photoEmoji": "🍖"}
-  ];
-
-  const DINNER_SIDES = [
-    {"id": "dinner_side_rice", "name": "Рис отварной", "description": "Простой рассыпчатый рис на гарнир", "photoEmoji": "🍚"},
-    {"id": "dinner_side_mashed_potato", "name": "Картофельное пюре", "description": "Классическое пюре со сливочным маслом", "photoEmoji": "🥔"}
-  ];
-
-  const DINNER_DESSERTS = [
-    {"id": "dinner_dessert_fruit_salad", "name": "Фруктовый салат", "description": "Яблоко, банан и ягоды с соком лайма", "photoEmoji": "🍎"},
-    {"id": "dinner_dessert_yogurt_honey", "name": "Йогурт с мёдом и ягодами", "description": "Греческий йогурт с мёдом и свежими ягодами", "photoEmoji": "🍯"}
-  ];
+  // Порядок, подписи, обязательность и эмодзи для каждой категории.
+  // required относится только к "main" на завтрак и "main"/"side" на ужин —
+  // остальное необязательно.
+  const CATEGORY_CONFIG = {
+    breakfast: [
+      { key: 'main', label: 'Основное', required: true, emoji: '🍳' },
+      { key: 'meat', label: 'Мясное блюдо', required: true, emoji: '🍗' },
+      { key: 'cold_starter', label: 'Холодные закуски (завтрак)', required: false, emoji: '🥗' },
+      { key: 'hot_starter', label: 'Горячие закуски (завтрак)', required: false, emoji: '🥑' },
+      { key: 'side', label: 'Гарнир на завтрак', required: false, emoji: '🥔' },
+      { key: 'soup', label: 'Суп на завтрак', required: false, emoji: '🍲' },
+      { key: 'sauce', label: 'Соус (завтрак)', required: false, emoji: '🥣' },
+      { key: 'dessert', label: 'Десерт на завтрак', required: false, emoji: '🍎' },
+    ],
+    dinner: [
+      { key: 'starter', label: 'Холодные закуски', required: false, emoji: '🥗' },
+      { key: 'hot_starter', label: 'Горячие закуски', required: false, emoji: '🥑' },
+      { key: 'soup', label: 'Суп', required: false, emoji: '🍲' },
+      { key: 'main', label: 'Основное блюдо', required: true, emoji: '🍽' },
+      { key: 'side', label: 'Гарнир', required: true, emoji: '🥔' },
+      { key: 'sauce', label: 'Соус', required: false, emoji: '🥣' },
+      { key: 'dessert', label: 'Десерт', required: false, emoji: '🍎' },
+    ],
+  };
 
   const EGG_OPTIONS = ["Жидкий желток", "Средний желток", "Полностью готовый"];
   const MEAT_OPTIONS = ["С кровью", "Слабой прожарки", "Средней прожарки", "Почти прожаренное", "Полностью прожаренное"];
@@ -344,8 +156,9 @@
     if (name) document.getElementById('greeting').textContent = `За что голосуем на завтра, ${name}?`;
   }
 
-  const selection = { breakfast: null, breakfastMeat: null, breakfastSide: null, breakfastSoup: null, breakfastDessert: null, starter: null, soup: null, main: null, side: null, dessert: null };
-  const donenessPrefs = {};
+  const selection = {}; // "breakfast.main" -> dishId, "dinner.side" -> dishId, etc.
+  const donenessPrefs = {}; // dishId -> {egg?, meat?}
+  let unavailableIds = new Set();
 
   function buildPillRow(dishId, kind, options, panel) {
     const label = document.createElement('p');
@@ -370,74 +183,106 @@
     panel.appendChild(row);
   }
 
-  function renderGroup(containerId, dishes, groupKey, unavailableSet) {
-    const container = document.getElementById(containerId);
-    const cards = [];
-    dishes.forEach(dish => {
-      const isUnavailable = unavailableSet.has(dish.id);
-      const card = document.createElement('div');
-      card.className = 'dish-card' + (isUnavailable ? ' unavailable' : '');
-      card.dataset.id = dish.id;
-      card.innerHTML = `
-        <img class="dish-photo" src="images/${dish.id}.jpg" alt=""
-             onerror="this.outerHTML='<div class=&quot;dish-photo-fallback&quot;>${dish.photoEmoji}</div>'">
-        <div>
-          <p class="dish-name">${dish.name}</p>
-          <p class="dish-desc">${dish.description}</p>
-          ${isUnavailable ? '<p class="unavailable-label">Нет нужных продуктов</p>' : ''}
-        </div>
-      `;
+  function renderCategory(meal, cat, dishes) {
+    const section = document.createElement('section');
+    const h2 = document.createElement('h2');
+    h2.textContent = cat.label;
+    section.appendChild(h2);
+    if (!cat.required) {
+      const tag = document.createElement('p');
+      tag.className = 'optional-tag';
+      tag.textContent = 'Необязательно';
+      section.appendChild(tag);
+    }
 
-      let panel = null;
-      if (dish.customize && dish.customize.length) {
-        panel = document.createElement('div');
-        panel.className = 'doneness-panel';
-        panel.style.display = 'none';
-        if (dish.customize.includes('egg')) buildPillRow(dish.id, 'egg', EGG_OPTIONS, panel);
-        if (dish.customize.includes('meat')) buildPillRow(dish.id, 'meat', MEAT_OPTIONS, panel);
-      }
+    const selKey = `${meal}.${cat.key}`;
+    const listDiv = document.createElement('div');
 
-      if (!isUnavailable) {
-        card.onclick = () => {
-          const alreadySelected = selection[groupKey] === dish.id;
-          cards.forEach(c => { c.card.classList.remove('selected'); if (c.panel) c.panel.style.display = 'none'; });
-          if (alreadySelected) {
-            selection[groupKey] = null;
-          } else {
-            selection[groupKey] = dish.id;
-            card.classList.add('selected');
-            if (panel) panel.style.display = 'block';
-          }
-        };
-      }
-      container.appendChild(card);
-      if (panel) container.appendChild(panel);
-      cards.push({ card, panel });
-    });
+    if (!dishes || dishes.length === 0) {
+      const note = document.createElement('p');
+      note.className = 'empty-note';
+      note.textContent = 'Сегодня в этой категории нечего предложить — пропускаем.';
+      listDiv.appendChild(note);
+    } else {
+      const cards = [];
+      dishes.forEach(dish => {
+        const isUnavailable = unavailableIds.has(dish.id);
+        const card = document.createElement('div');
+        card.className = 'dish-card' + (isUnavailable ? ' unavailable' : '');
+        card.dataset.id = dish.id;
+        card.innerHTML = `
+          <div class="dish-emoji">${cat.emoji}</div>
+          <div>
+            <p class="dish-name">${dish.name}</p>
+            <p class="dish-desc">${dish.description || ''}</p>
+            ${isUnavailable ? '<p class="unavailable-label">Нет нужных продуктов</p>' : ''}
+          </div>
+        `;
+
+        let panel = null;
+        if (dish.customize && dish.customize.length) {
+          panel = document.createElement('div');
+          panel.className = 'doneness-panel';
+          panel.style.display = 'none';
+          if (dish.customize.includes('egg')) buildPillRow(dish.id, 'egg', EGG_OPTIONS, panel);
+          if (dish.customize.includes('meat')) buildPillRow(dish.id, 'meat', MEAT_OPTIONS, panel);
+        }
+
+        if (!isUnavailable) {
+          card.onclick = () => {
+            const already = selection[selKey] === dish.id;
+            cards.forEach(c => { c.card.classList.remove('selected'); if (c.panel) c.panel.style.display = 'none'; });
+            if (already) {
+              delete selection[selKey];
+            } else {
+              selection[selKey] = dish.id;
+              card.classList.add('selected');
+              if (panel) panel.style.display = 'block';
+            }
+          };
+        }
+        listDiv.appendChild(card);
+        if (panel) listDiv.appendChild(panel);
+        cards.push({ card, panel });
+      });
+    }
+
+    section.appendChild(listDiv);
+
+    if (cat.required) {
+      const err = document.createElement('p');
+      err.className = 'error';
+      err.id = `err_${meal}_${cat.key}`;
+      err.textContent = `Выбери вариант в разделе «${cat.label}»`;
+      section.appendChild(err);
+    }
+
+    document.getElementById('sections').appendChild(section);
   }
 
-  async function fetchUnavailableDishes() {
+  async function loadTodayMenu() {
     try {
-      const res = await fetch(`${API_BASE_URL}/availability`);
-      if (!res.ok) throw new Error('bad response');
-      const data = await res.json();
-      return new Set(data.unavailable || []);
+      const [menuRes, availRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/menu-today`),
+        fetch(`${API_BASE_URL}/availability`),
+      ]);
+      const menu = menuRes.ok ? await menuRes.json() : { breakfast: {}, dinner: {} };
+      const avail = availRes.ok ? await availRes.json() : { unavailable: [] };
+      unavailableIds = new Set(avail.unavailable || []);
+      return menu;
     } catch (e) {
-      return new Set();
+      return { breakfast: {}, dinner: {} };
     }
   }
 
-  fetchUnavailableDishes().then(unavailable => {
-    renderGroup('breakfastList', BREAKFAST_DISHES, 'breakfast', unavailable);
-    renderGroup('breakfastMeatList', BREAKFAST_MEAT, 'breakfastMeat', unavailable);
-    renderGroup('breakfastSideList', DINNER_SIDES, 'breakfastSide', unavailable);
-    renderGroup('breakfastSoupList', SOUPS, 'breakfastSoup', unavailable);
-    renderGroup('breakfastDessertList', DINNER_DESSERTS, 'breakfastDessert', unavailable);
-    renderGroup('starterList', DINNER_STARTERS, 'starter', unavailable);
-    renderGroup('dinnerSoupList', SOUPS, 'soup', unavailable);
-    renderGroup('mainList', DINNER_MAINS, 'main', unavailable);
-    renderGroup('sideList', DINNER_SIDES, 'side', unavailable);
-    renderGroup('dessertList', DINNER_DESSERTS, 'dessert', unavailable);
+  loadTodayMenu().then(menu => {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    for (const meal of ['breakfast', 'dinner']) {
+      for (const cat of CATEGORY_CONFIG[meal]) {
+        renderCategory(meal, cat, (menu[meal] && menu[meal][cat.key]) || []);
+      }
+    }
   });
 
   function pickWithDoneness(dishId) {
@@ -447,60 +292,28 @@
   }
 
   function submit() {
-    const breakfastErr = document.getElementById('breakfastErr');
-    const breakfastMeatErr = document.getElementById('breakfastMeatErr');
-    const mainErr = document.getElementById('mainErr');
-    const sideErr = document.getElementById('sideErr');
     let ok = true;
-
-    if (!selection.breakfast) {
-      breakfastErr.style.display = 'block';
-      ok = false;
-    } else {
-      breakfastErr.style.display = 'none';
+    for (const meal of ['breakfast', 'dinner']) {
+      for (const cat of CATEGORY_CONFIG[meal]) {
+        if (!cat.required) continue;
+        const err = document.getElementById(`err_${meal}_${cat.key}`);
+        if (!selection[`${meal}.${cat.key}`]) {
+          if (err) err.style.display = 'block';
+          ok = false;
+        } else if (err) {
+          err.style.display = 'none';
+        }
+      }
     }
-
-    if (!selection.breakfastMeat) {
-      breakfastMeatErr.style.display = 'block';
-      ok = false;
-    } else {
-      breakfastMeatErr.style.display = 'none';
-    }
-
-    if (!selection.main) {
-      mainErr.style.display = 'block';
-      ok = false;
-    } else {
-      mainErr.style.display = 'none';
-    }
-
-    if (!selection.side) {
-      sideErr.style.display = 'block';
-      ok = false;
-    } else {
-      sideErr.style.display = 'none';
-    }
-
     if (!ok) return;
 
-    const payload = {
-      type: 'menu',
-      breakfast: {
-        main: pickWithDoneness(selection.breakfast),
-        meat: pickWithDoneness(selection.breakfastMeat),
-        side: pickWithDoneness(selection.breakfastSide),
-        soup: pickWithDoneness(selection.breakfastSoup),
-        dessert: pickWithDoneness(selection.breakfastDessert),
-      },
-      dinner: {
-        starter: pickWithDoneness(selection.starter),
-        soup: pickWithDoneness(selection.soup),
-        main: pickWithDoneness(selection.main),
-        side: pickWithDoneness(selection.side),
-        dessert: pickWithDoneness(selection.dessert),
-      },
-      notes: document.getElementById('notes').value.trim(),
-    };
+    const payload = { type: 'menu', breakfast: {}, dinner: {} };
+    for (const meal of ['breakfast', 'dinner']) {
+      for (const cat of CATEGORY_CONFIG[meal]) {
+        payload[meal][cat.key] = pickWithDoneness(selection[`${meal}.${cat.key}`]);
+      }
+    }
+    payload.notes = document.getElementById('notes').value.trim();
 
     if (tg) {
       tg.sendData(JSON.stringify(payload));

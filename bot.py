@@ -38,6 +38,9 @@ COMPILE_HOUR = int(os.environ.get("COMPILE_HOUR", "21"))
 COMPILE_MINUTE = int(os.environ.get("COMPILE_MINUTE", "30"))
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Africa/Johannesburg"))
 
+GENERATE_HOUR = int(os.environ.get("GENERATE_HOUR", "16"))
+GENERATE_MINUTE = int(os.environ.get("GENERATE_MINUTE", "45"))
+
 # Weekly shopping list — 0=Monday ... 6=Sunday
 WEEKLY_SHOPPING_DAY = int(os.environ.get("WEEKLY_SHOPPING_DAY", "6"))
 WEEKLY_SHOPPING_HOUR = int(os.environ.get("WEEKLY_SHOPPING_HOUR", "21"))
@@ -63,10 +66,17 @@ INVENTORY_FILE = DATA_DIR / "inventory.json"
 LAST_SHOPPING_LIST_FILE = DATA_DIR / "last_shopping_list.json"
 WEEKLY_SHORTFALL_FILE = DATA_DIR / "weekly_shortfall.json"
 DISHES_FILE = BASE_DIR / "dishes.json"
+TODAY_MENU_CACHE_FILE = DATA_DIR / "generated_dishes.json"
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 DISHES = json.loads(DISHES_FILE.read_text())
+if TODAY_MENU_CACHE_FILE.exists():
+    try:
+        DISHES = json.loads(TODAY_MENU_CACHE_FILE.read_text())
+        logger.info("Подхватил сгенерированное меню из кэша при старте")
+    except Exception:
+        pass
 
 # "Бытовые" ингредиенты (соль, масло, специи, зелень для украшения), которые
 # почти всегда есть под рукой — не учитываются при проверке доступности блюд.
@@ -142,6 +152,119 @@ def build_ingredient_typical_usage():
 
 
 INGREDIENT_TYPICAL_USAGE = build_ingredient_typical_usage()
+
+
+async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
+    """Раз в день, перед вечерним напоминанием, просит Claude придумать
+    меню на завтра ИЗ ТОГО, ЧТО РЕАЛЬНО ЕСТЬ в запасах, и подменяет
+    глобальный DISHES этими блюдами — весь остальной код (расчёт
+    порций, вычитание из запасов, сборка сообщения повару) работает
+    с этим точно так же, как раньше работал со статичным каталогом."""
+    global DISHES, INGREDIENT_TYPICAL_USAGE
+
+    inventory = load_inventory()
+    if not inventory:
+        logger.warning("Запасы пусты — пропускаю генерацию меню, оставляю прошлый DISHES")
+        return
+
+    inventory_lines = "\n".join(
+        f"{name}: {info['amount']} {info['unit']}" for name, info in inventory.items()
+    )
+
+    prompt = (
+        "Ты — шеф-повар ресторанного уровня. Ниже точный список продуктов, "
+        "которые сейчас реально есть на кухне (в граммах/мл/штуках). "
+        "Придумай меню на завтра для семьи на 7 человек, без глютена "
+        "(кроме их собственного безглютенового хлеба, если он есть в "
+        "списке — других заменителей глютена не используй, если их нет "
+        "в списке явно).\n\n"
+        f"Продукты в наличии:\n{inventory_lines}\n\n"
+        "Категории и сколько вариантов придумать в каждой:\n"
+        "Завтрак: main (3), meat (2), cold_starter (2), hot_starter (2), "
+        "side (2), soup (2), sauce (2), dessert (2)\n"
+        "Ужин: starter (2), hot_starter (2), soup (2), main (3), side (2), "
+        "sauce (2), dessert (2)\n\n"
+        "СТРОГИЕ правила:\n"
+        "1. Каждое блюдо должно быть реально приготовимо ИЗ ТОГО, ЧТО ЕСТЬ "
+        "В СПИСКЕ ВЫШЕ — не придумывай ингредиенты, которых там нет, "
+        "кроме соли, чёрного перца, растительного/оливкового масла и "
+        "обычных сухих специй (паприка, зира, орегано, чили хлопья, "
+        "уксус) — это всегда считается, что есть под рукой, даже если "
+        "не в списке.\n"
+        "2. Названия ингредиентов в поле \"ingredients\" должны СОВПАДАТЬ "
+        "БУКВАЛЬНО с названиями из списка продуктов выше — то же слово, "
+        "тот же регистр, никаких синонимов.\n"
+        "3. Не предлагай блюдо, для которого на одну порцию нужно больше "
+        "конкретного продукта, чем реально есть в наличии.\n"
+        "4. Рецепты — ресторанного уровня по вкусу, но объясни ПРЕДЕЛЬНО "
+        "подробно и по шагам, как для человека, который совсем не умеет "
+        "готовить: точное время, температура, признаки готовности. "
+        "Называй конкретный продукт точно (например «чеддер», а не "
+        "просто «сыр», если в списке есть и чеддер, и пармезан — не "
+        "путай их).\n"
+        "5. Все блюда без глютена.\n\n"
+        "Верни ТОЛЬКО валидный JSON, без какого-либо текста до или после, "
+        "в виде плоского словаря id -> блюдо, в точности такой структуры "
+        "(это должно совпадать со схемой существующего dishes.json — "
+        "meal_type, course, description, ingredients с unit и "
+        "amount_per_serving на ОДНУ порцию, recipe_steps, serving_note):\n\n"
+        "{\n"
+        '  "b_main_1": {"name": "...", "meal_type": "breakfast", '
+        '"course": "main", "description": "...", "ingredients": '
+        '[{"name": "...", "unit": "г", "amount_per_serving": 100}], '
+        '"recipe_steps": ["..."], "serving_note": "..."},\n'
+        '  "b_meat_1": {"name": "...", "meal_type": "breakfast", '
+        '"course": "meat", ...},\n'
+        "  ... (аналогично для cold_starter, hot_starter, side, soup, "
+        "sauce, dessert на завтрак, у каждого course = точное название "
+        "категории)\n"
+        '  "d_starter_1": {"name": "...", "meal_type": "dinner", '
+        '"course": "starter", ...},\n'
+        "  ... (аналогично для hot_starter, soup, main, side, sauce, "
+        "dessert на ужин)\n"
+        "}\n\n"
+        "id — короткий уникальный идентификатор латиницей вида "
+        '"b_main_1", "d_soup_2" (b_ для завтрака, d_ для ужина, дальше '
+        "название категории и номер по порядку)."
+    )
+
+    # 32 detailed dishes with full ingredients/steps needs far more than 8000
+    # output tokens (verified manually: truncates well past 20000 without
+    # streaming), and the SDK refuses max_tokens this large without
+    # streaming since the request could run past its 10-minute non-streaming
+    # cap — so this call streams and waits for the full response.
+    text_parts = []
+    with client.messages.stream(
+        model="claude-sonnet-5",
+        max_tokens=36000,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for chunk in stream.text_stream:
+            text_parts.append(chunk)
+        final_message = stream.get_final_message()
+    logger.info(
+        f"Генерация меню: stop_reason={final_message.stop_reason}, "
+        f"output_tokens={final_message.usage.output_tokens}"
+    )
+    text = "".join(text_parts).strip()
+
+    # На случай, если ответ обёрнут в ```json ... ```
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    try:
+        generated = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Не удалось распарсить сгенерированное меню: {e}. Оставляю прошлый DISHES.")
+        return
+
+    DISHES = generated
+    save_json(TODAY_MENU_CACHE_FILE, DISHES)
+    INGREDIENT_TYPICAL_USAGE = build_ingredient_typical_usage()
+    logger.info(f"Сгенерировано меню на сегодня: {len(DISHES)} блюд")
 
 
 # ---------- storage helpers ----------
@@ -255,32 +378,61 @@ async def stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Usage: /addstock мука 500 г
-    parts = context.args
-    if len(parts) < 3:
+    args = context.args
+    if len(args) < 3:
         await update.message.reply_text(
-            "Формат: /addstock название количество единица\n"
-            "Например: /addstock мука 500 г"
+            "Usage: /addstock <product> <amount> <unit>\n"
+            "Example: /addstock tomato 200 g"
         )
         return
 
-    unit = parts[-1]
     try:
-        amount = float(parts[-2])
+        amount = float(args[-2])
     except ValueError:
-        await update.message.reply_text("Количество должно быть числом. Пример: /addstock мука 500 г")
+        await update.message.reply_text(
+            "Couldn't read the amount. Usage: /addstock <product> <amount> <unit>\n"
+            "Example: /addstock tomato 200 g"
+        )
         return
-    name = " ".join(parts[:-2])
+
+    unit_en_raw = args[-1].lower()
+    name_en = " ".join(args[:-2]).strip()
+
+    EN_TO_RU_UNIT = {"g": "г", "kg": "кг", "ml": "мл", "l": "л", "pcs": "шт", "pc": "шт", "шт": "шт"}
+    unit_ru = EN_TO_RU_UNIT.get(unit_en_raw, unit_en_raw)
+
+    # Ищем среди уже известных переводов — совпадает ли введённое название
+    # (без учёта регистра) с чем-то, что уже есть в системе
+    ru_key = None
+    for ru_name, en_name in INGREDIENT_EN.items():
+        if en_name.lower() == name_en.lower():
+            ru_key = ru_name
+            break
 
     inventory = load_inventory()
-    if name in inventory:
-        inventory[name]["amount"] += amount
-        inventory[name]["unit"] = unit
+
+    if ru_key:
+        # Известный продукт — складываем с тем, что уже есть, под русским ключом
+        existing = inventory.get(ru_key, {"amount": 0, "unit": unit_ru})
+        existing["amount"] = round(existing.get("amount", 0) + amount, 2)
+        existing["unit"] = unit_ru
+        inventory[ru_key] = existing
+        total = existing["amount"]
+        display_name = name_en
     else:
-        inventory[name] = {"amount": amount, "unit": unit}
+        # Новый, ранее неизвестный продукт — заводим под тем именем, как ввели
+        existing = inventory.get(name_en, {"amount": 0, "unit": unit_en_raw})
+        existing["amount"] = round(existing.get("amount", 0) + amount, 2)
+        existing["unit"] = unit_en_raw
+        inventory[name_en] = existing
+        total = existing["amount"]
+        display_name = name_en
+
     save_inventory(inventory)
 
-    await update.message.reply_text(f"Добавлено: {name} — теперь {inventory[name]['amount']} {unit}")
+    await update.message.reply_text(
+        f"Added {amount} {unit_en_raw} of {display_name}. Total now: {total} {unit_en_raw}."
+    )
 
 
 async def updatestock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -354,6 +506,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "/stock — see what's currently in the kitchen\n"
         "/updatestock — quickly enter what's in the kitchen after a shopping trip\n"
+        "/addstock — add what you just bought, any product, any amount. Just say "
+        "how much you bought — the bot adds it to what's already there, you don't "
+        "need to know or calculate the old total.\n"
+        "Example: bought 200g of tomatoes? Just send:\n"
+        "/addstock tomato 200 g\n"
+        "Works for anything, even something not seen before — just type the name.\n"
         "/whatstobuy — see what's missing to unlock more dishes from the menu\n"
         "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/help — show this message again"
@@ -389,13 +547,13 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
     breakfast_raw = data.get("breakfast") or {}
     breakfast_pick = {
         course: valid_pick(breakfast_raw.get(course))
-        for course in ("main", "meat", "side", "soup", "dessert")
+        for course in ("main", "meat", "cold_starter", "hot_starter", "side", "soup", "sauce", "dessert")
     }
 
     dinner_raw = data.get("dinner") or {}
     dinner_pick = {
         course: valid_pick(dinner_raw.get(course))
-        for course in ("starter", "soup", "main", "side", "dessert")
+        for course in ("starter", "hot_starter", "soup", "main", "side", "sauce", "dessert")
     }
 
     vote_weight = (
@@ -507,11 +665,11 @@ def compute_daily_menu(responses):
     если никто не голосовал)."""
     breakfast = _tally_meal(
         [(r["name"], r.get("breakfast"), r.get("vote_weight", 1)) for r in responses.values()],
-        ("main", "meat", "side", "soup", "dessert"),
+        ("main", "meat", "cold_starter", "hot_starter", "side", "soup", "sauce", "dessert"),
     )
     dinner = _tally_meal(
         [(r["name"], r.get("dinner"), r.get("vote_weight", 1)) for r in responses.values()],
-        ("starter", "soup", "main", "side", "dessert"),
+        ("starter", "hot_starter", "soup", "main", "side", "sauce", "dessert"),
     )
     return {"breakfast": breakfast, "dinner": dinner}
 
@@ -596,11 +754,12 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     sections = []
     breakfast_labels = {
         "main": "Основное", "meat": "Мясное блюдо",
-        "side": "Гарнир", "soup": "Суп", "dessert": "Десерт",
+        "cold_starter": "Холодная закуска", "hot_starter": "Горячая закуска",
+        "side": "Гарнир", "soup": "Суп", "sauce": "Соус", "dessert": "Десерт",
     }
     if menu["breakfast"]:
         lines = ["## Завтрак"]
-        for course in ("main", "meat", "side", "soup", "dessert"):
+        for course in ("main", "meat", "cold_starter", "hot_starter", "side", "soup", "sauce", "dessert"):
             if course in menu["breakfast"]:
                 item = menu["breakfast"][course]
                 lines.append(f"### {breakfast_labels[course]}")
@@ -608,12 +767,13 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         sections.append("\n\n".join(lines))
 
     dinner_labels = {
-        "starter": "Стартер", "soup": "Суп", "main": "Основное",
-        "side": "Гарнир", "dessert": "Десерт",
+        "starter": "Холодная закуска", "hot_starter": "Горячая закуска",
+        "soup": "Суп", "main": "Основное", "side": "Гарнир",
+        "sauce": "Соус", "dessert": "Десерт",
     }
     if menu["dinner"]:
         lines = ["## Ужин"]
-        for course in ("starter", "soup", "main", "side", "dessert"):
+        for course in ("starter", "hot_starter", "soup", "main", "side", "sauce", "dessert"):
             if course in menu["dinner"]:
                 item = menu["dinner"][course]
                 lines.append(f"### {dinner_labels[course]}")
@@ -745,6 +905,27 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/menu-today":
+            result = {"breakfast": {}, "dinner": {}}
+            for dish_id, dish in DISHES.items():
+                meal = dish.get("meal_type")
+                if meal not in result:
+                    continue
+                course = dish.get("course") or ("main" if meal == "breakfast" else None)
+                if not course:
+                    continue
+                result[meal].setdefault(course, []).append({
+                    "id": dish_id,
+                    "name": dish.get("name", ""),
+                    "description": dish.get("description", ""),
+                    "customize": dish.get("customize", []),
+                })
+            body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
         else:
             self.send_response(200)
             self.end_headers()
@@ -782,6 +963,10 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
+    job_queue.run_daily(
+        generate_daily_menu_options,
+        time=dtime(hour=GENERATE_HOUR, minute=GENERATE_MINUTE, tzinfo=TIMEZONE),
+    )
     job_queue.run_daily(
         send_evening_reminders, time=dtime(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, tzinfo=TIMEZONE)
     )
