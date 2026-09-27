@@ -57,13 +57,9 @@
     padding: 10px 0;
     border-bottom: 1px solid var(--tg-theme-hint-color, #ececec);
   }
-  .row-name {
-    font-size: 14px;
-  }
-  .row-unit {
-    color: var(--tg-theme-hint-color, #999);
-    font-size: 12px;
-  }
+  .row-name { font-size: 14px; }
+  .row-unit { color: var(--tg-theme-hint-color, #999); font-size: 12px; }
+  .row-current { color: var(--tg-theme-hint-color, #999); font-size: 11px; display: block; }
   .row input {
     width: 84px;
     text-align: right;
@@ -81,128 +77,86 @@
     margin-top: 16px;
     text-align: center;
   }
+  .loading { text-align: center; padding: 60px 20px; color: var(--tg-theme-hint-color, #999); }
 </style>
 </head>
 <body>
-  <p class="kicker">Kitchen Stock</p>
-  <h1>What's in the kitchen right now?</h1>
-  <p class="sub">Enter what you have after a shopping trip. Leave blank fields untouched — only filled-in ones will update.</p>
+  <div id="loading" class="loading">Loading current stock…</div>
+  <div id="app" style="display:none">
+    <p class="kicker">Kitchen Stock</p>
+    <h1>What's in the kitchen right now?</h1>
+    <p class="sub">Enter what you have after a shopping trip. Leave blank fields untouched — only filled-in ones will update.</p>
 
-  <input type="text" id="search" placeholder="Search for an item...">
-  <div id="list"></div>
-  <p class="hint">Only fill in what you actually counted — everything else stays as it was</p>
+    <input type="text" id="search" placeholder="Search for an item...">
+    <div id="list"></div>
+    <p class="hint">Only fill in what you actually counted — everything else stays as it was</p>
+  </div>
 
 <script>
-  // "ru" is the internal key the bot uses (must match dishes.json exactly) —
-  // "en" and "unitEn" are just what's shown on screen to the cook.
-  const INGREDIENTS = [
-    {"ru": "авокадо", "en": "Avocado", "unitEn": "g"},
-    {"ru": "банан", "en": "Banana", "unitEn": "g"},
-    {"ru": "безглютеновый хлеб", "en": "Gluten-free bread", "unitEn": "pcs"},
-    {"ru": "бекон", "en": "Bacon", "unitEn": "g"},
-    {"ru": "болгарский перец", "en": "Bell pepper", "unitEn": "g"},
-    {"ru": "ветчина", "en": "Ham", "unitEn": "g"},
-    {"ru": "говядина", "en": "Beef", "unitEn": "g"},
-    {"ru": "говяжий стейк", "en": "Beef steak", "unitEn": "g"},
-    {"ru": "говяжий фарш", "en": "Ground beef", "unitEn": "g"},
-    {"ru": "горчица", "en": "Mustard", "unitEn": "g"},
-    {"ru": "греческий йогурт", "en": "Greek yogurt", "unitEn": "g"},
-    {"ru": "гречневая крупа", "en": "Buckwheat groats", "unitEn": "g"},
-    {"ru": "зира", "en": "Cumin", "unitEn": "g"},
-    {"ru": "картофель", "en": "Potato", "unitEn": "g"},
-    {"ru": "колбаски", "en": "Sausages", "unitEn": "g"},
-    {"ru": "красный винный уксус", "en": "Red wine vinegar", "unitEn": "ml"},
-    {"ru": "кукурузные тако-шеллы", "en": "Corn taco shells", "unitEn": "pcs"},
-    {"ru": "куриное бедро", "en": "Chicken thigh", "unitEn": "g"},
-    {"ru": "куриное филе", "en": "Chicken breast", "unitEn": "g"},
-    {"ru": "куриный фарш", "en": "Chicken mince", "unitEn": "g"},
-    {"ru": "лайм", "en": "Lime", "unitEn": "g"},
-    {"ru": "лимон", "en": "Lemon", "unitEn": "g"},
-    {"ru": "лук репчатый", "en": "Onion", "unitEn": "g"},
-    {"ru": "молоко", "en": "Milk", "unitEn": "ml"},
-    {"ru": "морковь", "en": "Carrot", "unitEn": "g"},
-    {"ru": "нутовая паста", "en": "Chickpea pasta", "unitEn": "g"},
-    {"ru": "мёд", "en": "Honey", "unitEn": "g"},
-    {"ru": "овощной бульон", "en": "Vegetable broth", "unitEn": "ml"},
-    {"ru": "огурец", "en": "Cucumber", "unitEn": "g"},
-    {"ru": "огурцы солёные", "en": "Pickled cucumbers", "unitEn": "g"},
-    {"ru": "оливковое масло", "en": "Olive oil", "unitEn": "ml"},
-    {"ru": "орегано", "en": "Oregano", "unitEn": "g"},
-    {"ru": "паприка", "en": "Paprika", "unitEn": "g"},
-    {"ru": "пармезан", "en": "Parmesan", "unitEn": "g"},
-    {"ru": "петрушка", "en": "Parsley", "unitEn": "g"},
-    {"ru": "помидор", "en": "Tomato", "unitEn": "g"},
-    {"ru": "растительное масло", "en": "Vegetable oil", "unitEn": "ml"},
-    {"ru": "рис", "en": "Rice", "unitEn": "g"},
-    {"ru": "рис арборио", "en": "Arborio rice", "unitEn": "g"},
-    {"ru": "рис длиннозёрный", "en": "Long-grain rice", "unitEn": "g"},
-    {"ru": "розмарин", "en": "Rosemary", "unitEn": "g"},
-    {"ru": "свежая зелень", "en": "Fresh herbs", "unitEn": "g"},
-    {"ru": "свёкла", "en": "Beetroot", "unitEn": "g"},
-    {"ru": "свиной фарш", "en": "Pork mince", "unitEn": "g"},
-    {"ru": "слабосолёный лосось", "en": "Lightly salted salmon", "unitEn": "g"},
-    {"ru": "сливки", "en": "Cream", "unitEn": "ml"},
-    {"ru": "сливочное масло", "en": "Butter", "unitEn": "g"},
-    {"ru": "сметана", "en": "Sour cream", "unitEn": "ml"},
-    {"ru": "соль", "en": "Salt", "unitEn": "g"},
-    {"ru": "специи для тако", "en": "Taco seasoning", "unitEn": "g"},
-    {"ru": "стейк из страусятины", "en": "Ostrich steak", "unitEn": "g"},
-    {"ru": "сыр твёрдый", "en": "Hard cheese", "unitEn": "g"},
-    {"ru": "томатная паста", "en": "Tomato paste", "unitEn": "g"},
-    {"ru": "укроп", "en": "Dill", "unitEn": "g"},
-    {"ru": "уксус", "en": "Vinegar", "unitEn": "ml"},
-    {"ru": "фасоль в томате", "en": "Baked beans (in tomato sauce)", "unitEn": "g"},
-    {"ru": "филе белой рыбы", "en": "White fish fillet", "unitEn": "g"},
-    {"ru": "филе лосося", "en": "Salmon fillet", "unitEn": "g"},
-    {"ru": "цукини", "en": "Zucchini", "unitEn": "g"},
-    {"ru": "чеснок", "en": "Garlic", "unitEn": "g"},
-    {"ru": "чили хлопья", "en": "Chili flakes", "unitEn": "g"},
-    {"ru": "чёрный перец", "en": "Black pepper", "unitEn": "g"},
-    {"ru": "шампиньоны", "en": "Mushrooms", "unitEn": "g"},
-    {"ru": "яблоко", "en": "Apple", "unitEn": "g"},
-    {"ru": "ягоды", "en": "Berries", "unitEn": "g"},
-    {"ru": "яйца", "en": "Eggs", "unitEn": "pcs"}
-  ];
+  const API_BASE_URL = 'https://family-meal-bot-er5p.onrender.com';
 
   const tg = window.Telegram?.WebApp;
   if (tg) { tg.ready(); tg.expand(); }
 
-  const list = document.getElementById('list');
+  let ITEMS = [];
   const values = {};
 
+  async function loadCurrentStock() {
+    try {
+      const res = await fetch(`${API_BASE_URL}/current-stock`);
+      const data = res.ok ? await res.json() : { items: [] };
+      return data.items || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   function renderList(filter) {
+    const list = document.getElementById('list');
     list.innerHTML = '';
-    INGREDIENTS
-      .filter(i => !filter || i.en.toLowerCase().includes(filter.toLowerCase()))
-      .forEach(ing => {
+    ITEMS
+      .filter(i => !filter || i.display.toLowerCase().includes(filter.toLowerCase()))
+      .forEach(item => {
         const row = document.createElement('div');
         row.className = 'row';
         row.innerHTML = `
           <div>
-            <span class="row-name">${ing.en}</span>
-            <span class="row-unit"> (${ing.unitEn})</span>
+            <span class="row-name">${item.display}</span>
+            <span class="row-unit"> (${item.unit})</span>
+            <span class="row-current">currently: ${item.current} ${item.unit}</span>
           </div>
           <input type="number" min="0" step="any" inputmode="decimal"
-                 value="${values[ing.ru] ?? ''}" data-ru="${ing.ru}">
+                 value="${values[item.key] ?? ''}" data-key="${item.key}">
         `;
         const input = row.querySelector('input');
         input.oninput = () => {
-          if (input.value === '') delete values[ing.ru];
-          else values[ing.ru] = parseFloat(input.value);
+          if (input.value === '') delete values[item.key];
+          else values[item.key] = parseFloat(input.value);
         };
         list.appendChild(row);
       });
   }
 
+  loadCurrentStock().then(items => {
+    ITEMS = items;
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    renderList('');
+  });
+
   document.getElementById('search').oninput = (e) => renderList(e.target.value);
-  renderList('');
+
+  const EN_TO_RU_UNIT = { g: "г", kg: "кг", ml: "мл", l: "л", pcs: "шт" };
 
   function submit() {
-    const RU_UNIT = {"g": "г", "ml": "мл", "pcs": "шт"};
     const stock = {};
-    for (const ru in values) {
-      const meta = INGREDIENTS.find(i => i.ru === ru);
-      stock[ru] = { amount: values[ru], unit: RU_UNIT[meta.unitEn] || meta.unitEn };
+    for (const key in values) {
+      const item = ITEMS.find(i => i.key === key);
+      if (!item) continue;
+      // Отправляем боту тот же key (внутреннее имя) — он сам знает, какой
+      // единицей это хранить. Единицу конвертируем обратно, если ключ был
+      // известным русским продуктом (у него всегда была русская единица).
+      stock[key] = { amount: values[key], unit: item.unit };
     }
     const payload = { type: 'stock', stock };
     if (tg) {

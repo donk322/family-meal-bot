@@ -540,6 +540,15 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
         if not stock_update:
             await update.message.reply_text("Nothing was filled in — stock unchanged.")
             return
+
+        EN_TO_RU_UNIT = {"g": "г", "kg": "кг", "ml": "мл", "l": "л", "pcs": "шт"}
+        for key, item in stock_update.items():
+            unit_in = item.get("unit", "")
+            if key in INGREDIENT_EN:
+                # Известный продукт — храним в привычной русской единице
+                item["unit"] = EN_TO_RU_UNIT.get(unit_in, unit_in)
+            # иначе (новый, свободный ключ) — оставляем единицу как прислали
+
         inventory = load_inventory()
         for name, item in stock_update.items():
             inventory[name] = {"amount": item["amount"], "unit": item["unit"]}
@@ -933,6 +942,37 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     "customize": dish.get("customize", []),
                 })
             body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/current-stock":
+            inventory = load_inventory()
+            all_names = set(inventory.keys())
+            units_by_name = {k: v.get("unit", "") for k, v in inventory.items()}
+
+            for dish in DISHES.values():
+                for ing in dish.get("ingredients", []):
+                    if ing["name"] not in all_names:
+                        all_names.add(ing["name"])
+                        units_by_name[ing["name"]] = ing["unit"]
+
+            RU_TO_EN_UNIT = {"г": "g", "мл": "ml", "шт": "pcs", "кг": "kg", "л": "l"}
+            items = []
+            for key in sorted(all_names):
+                display = to_en(key) if key in INGREDIENT_EN else key
+                unit_raw = units_by_name.get(key, "")
+                unit_display = RU_TO_EN_UNIT.get(unit_raw, unit_raw)
+                current_amount = inventory.get(key, {}).get("amount", 0)
+                items.append({
+                    "key": key,
+                    "display": display,
+                    "unit": unit_display,
+                    "current": current_amount,
+                })
+
+            body = json.dumps({"items": items}, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
