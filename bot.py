@@ -49,6 +49,9 @@ TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Africa/Johannesburg"))
 GENERATE_HOUR = int(os.environ.get("GENERATE_HOUR", "16"))
 GENERATE_MINUTE = int(os.environ.get("GENERATE_MINUTE", "45"))
 
+NUDGE_HOUR = int(os.environ.get("NUDGE_HOUR", "18"))
+NUDGE_MINUTE = int(os.environ.get("NUDGE_MINUTE", "0"))
+
 # Weekly shopping list — 0=Monday ... 6=Sunday
 WEEKLY_SHOPPING_DAY = int(os.environ.get("WEEKLY_SHOPPING_DAY", "6"))
 WEEKLY_SHOPPING_HOUR = int(os.environ.get("WEEKLY_SHOPPING_HOUR", "21"))
@@ -64,6 +67,11 @@ PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "2"))
 
 # /whatstobuy reports shortfall for a full family-size batch, not one serving.
 WHATSTOBUY_SERVINGS = int(os.environ.get("WHATSTOBUY_SERVINGS", "8"))
+
+# The two kids eat breakfast separately and earlier — just the winning
+# main dish, at a fixed headcount regardless of how the vote went.
+KIDS_BREAKFAST_COUNT = int(os.environ.get("KIDS_BREAKFAST_COUNT", "2"))
+KIDS_BREAKFAST_BUFFER = int(os.environ.get("KIDS_BREAKFAST_BUFFER", "1"))
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -197,6 +205,25 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         if disliked_dishes else ""
     )
 
+    too_much_dishes = [name for name, r in ratings.items()
+                       if r.get("portion_much", 0) > r.get("portion_right", 0) + r.get("portion_little", 0)]
+    too_little_dishes = [name for name, r in ratings.items()
+                         if r.get("portion_little", 0) > r.get("portion_right", 0) + r.get("portion_much", 0)]
+
+    portion_note = ""
+    if too_much_dishes:
+        portion_note += (
+            f"\nЭтих блюд обычно готовится слишком много — если предложишь "
+            f"что-то похожее, укажи чуть меньший amount_per_serving: "
+            f"{', '.join(too_much_dishes)}.\n"
+        )
+    if too_little_dishes:
+        portion_note += (
+            f"\nЭтих блюд обычно не хватает — если предложишь что-то "
+            f"похожее, укажи чуть больший amount_per_serving: "
+            f"{', '.join(too_little_dishes)}.\n"
+        )
+
     prompt = (
         "Ты — шеф-повар ресторанного уровня. Ниже точный список продуктов, "
         "которые сейчас реально есть на кухне (в граммах/мл/штуках). "
@@ -205,7 +232,7 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         "списке — других заменителей глютена не используй, если их нет "
         "в списке явно).\n\n"
         f"Продукты в наличии:\n{inventory_lines}\n"
-        + dislikes_note + bad_dishes_note +
+        + dislikes_note + bad_dishes_note + portion_note +
         "\nКатегории и сколько вариантов придумать в каждой:\n"
         "Завтрак: main (3), meat (2), cold_starter (2), hot_starter (2), "
         "side (2), soup (2), sauce (2), dessert (2)\n"
@@ -570,8 +597,13 @@ async def rate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     for dish_name in served:
         keyboard.append([
-            InlineKeyboardButton(f"👍 {dish_name}", callback_data=f"rate|up|{dish_name}"),
-            InlineKeyboardButton(f"👎 {dish_name}", callback_data=f"rate|down|{dish_name}"),
+            InlineKeyboardButton(f"👍 {dish_name[:22]}", callback_data=f"rate|up|{dish_name}"),
+            InlineKeyboardButton("👎", callback_data=f"rate|down|{dish_name}"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("Too little", callback_data=f"portion|little|{dish_name}"),
+            InlineKeyboardButton("Just right", callback_data=f"portion|right|{dish_name}"),
+            InlineKeyboardButton("Too much", callback_data=f"portion|much|{dish_name}"),
         ])
     await update.message.reply_text(
         "How was today's food? Tap to rate each dish:",
@@ -589,6 +621,19 @@ async def rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry[direction] = entry.get(direction, 0) + 1
     save_json(FOOD_PREFERENCES_FILE, prefs)
     await query.edit_message_text(f"Thanks! Recorded your rating for {dish_name}.")
+
+
+async def portion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, size, dish_name = query.data.split("|", 2)
+    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
+    ratings = prefs.setdefault("ratings", {})
+    entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
+    key = f"portion_{size}"  # portion_little / portion_right / portion_much
+    entry[key] = entry.get(key, 0) + 1
+    save_json(FOOD_PREFERENCES_FILE, prefs)
+    await query.edit_message_text(f"Thanks! Recorded portion feedback for {dish_name}.")
 
 
 async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -671,6 +716,23 @@ async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.warning("Не удалось отправить напоминание %s: %s", user_id, e)
+
+
+async def nudge_non_voters(context: ContextTypes.DEFAULT_TYPE):
+    family = load_family()
+    responses = load_today_responses()
+    voted_ids = set(responses.keys())
+    for user_id, info in family.items():
+        if user_id in voted_ids:
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=int(user_id),
+                text="⏰ Напоминание: ты ещё не проголосовал(а) за меню на завтра! Осталось немного времени.",
+                reply_markup=menu_keyboard(),
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось напомнить {user_id}: {e}")
 
 
 def apply_inventory(needed):
@@ -833,13 +895,27 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
             for ing in dish["ingredients"]
         )
         steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
+        voters_note = f" (голосовали: {format_voters(voters)})" if voters else ""
         return (
-            f"{dish['name']} — на {portions} {plural_portions(portions)} "
-            f"(голосовали: {format_voters(voters)}). "
+            f"{dish['name']} — на {portions} {plural_portions(portions)}"
+            f"{voters_note}. "
             f"Ингредиенты: {scaled}. Приготовление: {steps} Подача: {dish['serving_note']}"
         )
 
+    kids_section = ""
+    if menu["breakfast"].get("main"):
+        main_dish_id = menu["breakfast"]["main"]["dish_id"]
+        kids_portions = KIDS_BREAKFAST_COUNT + KIDS_BREAKFAST_BUFFER
+        kids_section = (
+            "## EARLY KIDS' BREAKFAST (prepare first, before the regular breakfast)\n\n"
+            + format_dish_block(main_dish_id, kids_portions, [])
+            + "\n\nServe this early, separately from the rest of the family's breakfast — "
+            "just this one dish, not the full spread."
+        )
+
     sections = []
+    if kids_section:
+        sections.append(kids_section)
     breakfast_labels = {
         "main": "Основное", "meat": "Мясное блюдо",
         "cold_starter": "Холодная закуска", "hot_starter": "Горячая закуска",
@@ -974,9 +1050,33 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    lines = [f"{to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}" for name, item in weekly.items()]
+    items_text = "\n".join(
+        f"{to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}"
+        for name, item in weekly.items()
+    )
+    group_prompt = (
+        "Сгруппируй этот список покупок по типичным отделам "
+        "супермаркета (Meat & Fish, Dairy & Eggs, Produce, Pantry, "
+        "Other — используй только те заголовки, для которых реально "
+        "есть товары). Выведи только сгруппированный список, без "
+        "предисловий и заключений, каждый отдел с заголовком, товары "
+        "списком под ним:\n\n" + items_text
+    )
+    try:
+        group_message = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": group_prompt}],
+        )
+        grouped_text = "".join(
+            b.text for b in group_message.content if b.type == "text"
+        ).strip()
+    except Exception as e:
+        logger.warning(f"Не удалось сгруппировать список покупок: {e}")
+        grouped_text = items_text  # запасной вариант — обычный плоский список
+
     text = (
-        "This week's shopping list:\n" + "\n".join(lines) +
+        "This week's shopping list:\n\n" + grouped_text +
         "\n\nOnce you've bought everything, send the bot /restock to update stock levels."
     )
     await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
@@ -1084,6 +1184,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("rate", rate_cmd))
     app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
+    app.add_handler(CallbackQueryHandler(portion_callback, pattern=r"^portion\|"))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
@@ -1093,6 +1194,10 @@ def main():
     )
     job_queue.run_daily(
         send_evening_reminders, time=dtime(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, tzinfo=TIMEZONE)
+    )
+    job_queue.run_daily(
+        nudge_non_voters,
+        time=dtime(hour=NUDGE_HOUR, minute=NUDGE_MINUTE, tzinfo=TIMEZONE),
     )
     job_queue.run_daily(
         compile_and_send_to_cook,
