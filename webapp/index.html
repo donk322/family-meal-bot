@@ -104,6 +104,11 @@
 </head>
 <body>
   <div id="loading" class="loading">Готовим сегодняшнее меню…</div>
+  <div id="notReady" style="display:none; text-align:center; padding:60px 20px;">
+    <p class="kicker">Голосование за меню</p>
+    <h1>Меню ещё не готово</h1>
+    <p class="sub">Сегодняшнее меню пока не сгенерировано — загляни чуть попозже, оно появится автоматически.</p>
+  </div>
   <div id="app" style="display:none">
     <p class="kicker">Голосование за меню</p>
     <h1 id="greeting">За что голосуем на завтра?</h1>
@@ -277,6 +282,16 @@
 
   loadTodayMenu().then(menu => {
     document.getElementById('loading').style.display = 'none';
+
+    const today = new Date();
+    const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    const isFresh = menu.generated_date === todayStr;
+
+    if (!isFresh) {
+      document.getElementById('notReady').style.display = 'block';
+      return;
+    }
+
     document.getElementById('app').style.display = 'block';
     for (const meal of ['breakfast', 'dinner']) {
       for (const cat of CATEGORY_CONFIG[meal]) {
