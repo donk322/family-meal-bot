@@ -437,19 +437,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(greeting, reply_markup=menu_keyboard())
 
 
-async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ручной перезапуск генерации меню — только для главы семьи. Нужен,
-    когда деплой/рестарт после GENERATE_HOUR:GENERATE_MINUTE сбросил
-    сегодняшнее меню и мини-апп показывает «Меню ещё не готово»."""
+async def check_admin(update: Update, command: str) -> bool:
+    """Доступ к ручным командам: создатель, глава семьи по id или по username.
+    Отвечает отказом сам, если доступа нет."""
     user = update.effective_user
-    allowed = (
+    allowed = bool(
         user.id in (CREATOR_CHAT_ID, FAMILY_HEAD_CHAT_ID)
         or (FAMILY_HEAD_USERNAME
             and (user.username or "").lstrip("@").lower() == FAMILY_HEAD_USERNAME)
     )
-    logger.info(f"/regenmenu от id={user.id} username={user.username!r}, доступ={'да' if allowed else 'нет'}")
+    logger.info(f"/{command} от id={user.id} username={user.username!r}, доступ={'да' if allowed else 'нет'}")
     if not allowed:
         await update.message.reply_text("Эта команда доступна только главе семьи.")
+    return allowed
+
+
+async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ручной перезапуск генерации меню — только для главы семьи. Нужен,
+    когда деплой/рестарт после GENERATE_HOUR:GENERATE_MINUTE сбросил
+    сегодняшнее меню и мини-апп показывает «Меню ещё не готово»."""
+    if not await check_admin(update, "regenmenu"):
         return
 
     await update.message.reply_text("Генерирую меню на сегодня, это займёт пару минут…")
@@ -462,6 +469,26 @@ async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Не получилось сгенерировать меню (пустые запасы или ошибка "
             "разбора ответа) — подробности в логах Render."
         )
+
+
+async def forcecompile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Собрать и отправить план повару прямо сейчас, не дожидаясь
+    COMPILE_HOUR:COMPILE_MINUTE — например, если плановая сборка прошла
+    почти без голосов."""
+    if not await check_admin(update, "forcecompile"):
+        return
+
+    if not COOK_CHAT_ID:
+        await update.message.reply_text("COOK_CHAT_ID не задан — некому отправлять план.")
+        return
+    responses = load_today_responses()
+    if not responses:
+        await update.message.reply_text("Сегодня ещё никто не проголосовал — собирать нечего.")
+        return
+
+    await update.message.reply_text(f"Собираю план по {len(responses)} голосам и отправляю повару…")
+    await compile_and_send_to_cook(context)
+    await update.message.reply_text("Сборка завершена — подробности в логах, если повару ничего не пришло.")
 
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1038,6 +1065,20 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
 
     plan_summary = "\n\n---\n\n".join(sections)
 
+    # Повторная сборка за день (/forcecompile) не должна второй раз вычитать
+    # запасы и дописывать недостачу — откатываемся к состоянию до первой.
+    snapshot_file = DATA_DIR / f"before_compile_{datetime.now(TIMEZONE).date()}.json"
+    if snapshot_file.exists():
+        snapshot = load_json(snapshot_file, {})
+        save_inventory(snapshot["inventory"])
+        save_json(WEEKLY_SHORTFALL_FILE, snapshot["weekly_shortfall"])
+        logger.info("Повторная сборка за сегодня — восстановил запасы до первой сборки")
+    else:
+        save_json(snapshot_file, {
+            "inventory": load_inventory(),
+            "weekly_shortfall": load_json(WEEKLY_SHORTFALL_FILE, {}),
+        })
+
     needed = aggregate_ingredients_from_menu(menu)
     shopping_list, updated_inventory = apply_inventory(needed)
     save_inventory(updated_inventory)
@@ -1273,6 +1314,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("rate", rate_cmd))
     app.add_handler(CommandHandler("regenmenu", regenmenu_cmd))
+    app.add_handler(CommandHandler("forcecompile", forcecompile_cmd))
     app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
     app.add_handler(CallbackQueryHandler(portion_callback, pattern=r"^portion\|"))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
