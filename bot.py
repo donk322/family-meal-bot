@@ -41,6 +41,9 @@ COOK_CHAT_ID = int(os.environ.get("COOK_CHAT_ID", "0") or 0)
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "20"))
 REMINDER_MINUTE = int(os.environ.get("REMINDER_MINUTE", "0"))
 FAMILY_HEAD_USERNAME = os.environ.get("FAMILY_HEAD_USERNAME", "").lstrip("@").lower()
+CREATOR_CHAT_ID = 813950397
+FAMILY_HEAD_CHAT_ID = 713575142
+VLADA_CHAT_ID = 101205843  # пока только для опознания, персональный трек — позже
 FAMILY_HEAD_VOTE_WEIGHT = int(os.environ.get("FAMILY_HEAD_VOTE_WEIGHT", "2"))
 COMPILE_HOUR = int(os.environ.get("COMPILE_HOUR", "21"))
 COMPILE_MINUTE = int(os.environ.get("COMPILE_MINUTE", "30"))
@@ -439,7 +442,13 @@ async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     когда деплой/рестарт после GENERATE_HOUR:GENERATE_MINUTE сбросил
     сегодняшнее меню и мини-апп показывает «Меню ещё не готово»."""
     user = update.effective_user
-    if not (FAMILY_HEAD_USERNAME and (user.username or "").lower() == FAMILY_HEAD_USERNAME):
+    allowed = (
+        user.id in (CREATOR_CHAT_ID, FAMILY_HEAD_CHAT_ID)
+        or (FAMILY_HEAD_USERNAME
+            and (user.username or "").lstrip("@").lower() == FAMILY_HEAD_USERNAME)
+    )
+    logger.info(f"/regenmenu от id={user.id} username={user.username!r}, доступ={'да' if allowed else 'нет'}")
+    if not allowed:
         await update.message.reply_text("Эта команда доступна только главе семьи.")
         return
 
