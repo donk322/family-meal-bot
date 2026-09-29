@@ -9,11 +9,19 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
+from telegram import (
+    Update,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -52,7 +60,7 @@ LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "8"))
 
 # Extra portions to cook on top of the number of people who voted, as a
 # buffer for seconds.
-PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "3"))
+PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "2"))
 
 # /whatstobuy reports shortfall for a full family-size batch, not one serving.
 WHATSTOBUY_SERVINGS = int(os.environ.get("WHATSTOBUY_SERVINGS", "8"))
@@ -67,6 +75,8 @@ LAST_SHOPPING_LIST_FILE = DATA_DIR / "last_shopping_list.json"
 WEEKLY_SHORTFALL_FILE = DATA_DIR / "weekly_shortfall.json"
 DISHES_FILE = BASE_DIR / "dishes.json"
 TODAY_MENU_CACHE_FILE = DATA_DIR / "generated_dishes.json"
+FOOD_PREFERENCES_FILE = DATA_DIR / "food_preferences.json"
+TODAY_SERVED_FILE = DATA_DIR / "today_served.json"
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -172,6 +182,21 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         f"{name}: {info['amount']} {info['unit']}" for name, info in inventory.items()
     )
 
+    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
+    dislikes = prefs.get("dislikes", [])
+    ratings = prefs.get("ratings", {})
+    disliked_dishes = [name for name, r in ratings.items() if r.get("down", 0) > r.get("up", 0)]
+
+    dislikes_note = (
+        f"\n\nСемья не любит эти продукты — не используй их вообще, ни в "
+        f"одном блюде: {', '.join(dislikes)}.\n" if dislikes else ""
+    )
+    bad_dishes_note = (
+        f"\nЭти блюда семье не понравились раньше — не предлагай их снова "
+        f"и не предлагай что-то очень похожее: {', '.join(disliked_dishes)}.\n"
+        if disliked_dishes else ""
+    )
+
     prompt = (
         "Ты — шеф-повар ресторанного уровня. Ниже точный список продуктов, "
         "которые сейчас реально есть на кухне (в граммах/мл/штуках). "
@@ -179,8 +204,9 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         "(кроме их собственного безглютенового хлеба, если он есть в "
         "списке — других заменителей глютена не используй, если их нет "
         "в списке явно).\n\n"
-        f"Продукты в наличии:\n{inventory_lines}\n\n"
-        "Категории и сколько вариантов придумать в каждой:\n"
+        f"Продукты в наличии:\n{inventory_lines}\n"
+        + dislikes_note + bad_dishes_note +
+        "\nКатегории и сколько вариантов придумать в каждой:\n"
         "Завтрак: main (3), meat (2), cold_starter (2), hot_starter (2), "
         "side (2), soup (2), sauce (2), dessert (2)\n"
         "Ужин: starter (2), hot_starter (2), soup (2), main (3), side (2), "
@@ -529,10 +555,40 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/addstock tomato 200 g\n"
         "Works for anything, even something not seen before — just type the name.\n"
         "/whatstobuy — see what's missing to unlock more dishes from the menu\n"
+        "/rate — rate today's dishes (👍/👎), helps the AI learn what to make again\n"
         "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/help — show this message again"
     )
     await update.message.reply_text(text)
+
+
+async def rate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    served = load_json(TODAY_SERVED_FILE, [])
+    if not served:
+        await update.message.reply_text("Nothing recorded as served today yet.")
+        return
+    keyboard = []
+    for dish_name in served:
+        keyboard.append([
+            InlineKeyboardButton(f"👍 {dish_name}", callback_data=f"rate|up|{dish_name}"),
+            InlineKeyboardButton(f"👎 {dish_name}", callback_data=f"rate|down|{dish_name}"),
+        ])
+    await update.message.reply_text(
+        "How was today's food? Tap to rate each dish:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, direction, dish_name = query.data.split("|", 2)
+    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
+    ratings = prefs.setdefault("ratings", {})
+    entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
+    entry[direction] = entry.get(direction, 0) + 1
+    save_json(FOOD_PREFERENCES_FILE, prefs)
+    await query.edit_message_text(f"Thanks! Recorded your rating for {dish_name}.")
 
 
 async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -752,6 +808,13 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Голосов нет — пропускаю сборку")
         return
 
+    served_names = []
+    for course_data in menu["breakfast"].values():
+        served_names.append(DISHES[course_data["dish_id"]]["name"])
+    for course_data in menu["dinner"].values():
+        served_names.append(DISHES[course_data["dish_id"]]["name"])
+    save_json(TODAY_SERVED_FILE, served_names)
+
     def format_voters(voters):
         labels = []
         for v in voters:
@@ -876,17 +939,19 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         "видоизменить, и как именно."
     )
 
-    message = client.messages.create(
+    text_parts = []
+    with client.messages.stream(
         model="claude-sonnet-5",
-        max_tokens=8000,
+        max_tokens=20000,
         messages=[{"role": "user", "content": prompt}],
-    )
-    recipe_text = "".join(
-        block.text for block in message.content if block.type == "text"
-    )
+    ) as stream:
+        for chunk in stream.text_stream:
+            text_parts.append(chunk)
+        final_message = stream.get_final_message()
+    recipe_text = "".join(text_parts)
     logger.info(
-        f"Claude API: stop_reason={message.stop_reason}, "
-        f"длина ответа={len(recipe_text)} символов"
+        f"Compile-сообщение повару: stop_reason={final_message.stop_reason}, "
+        f"длина={len(recipe_text)} символов"
     )
     chunks = [recipe_text[i : i + 3500] for i in range(0, len(recipe_text), 3500)]
     for chunk in chunks:
@@ -1017,6 +1082,8 @@ def main():
     app.add_handler(CommandHandler("restock", restock))
     app.add_handler(CommandHandler("whatstobuy", whatstobuy_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("rate", rate_cmd))
+    app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
