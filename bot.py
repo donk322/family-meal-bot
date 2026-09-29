@@ -94,6 +94,10 @@ if TODAY_MENU_CACHE_FILE.exists():
     try:
         DISHES = json.loads(TODAY_MENU_CACHE_FILE.read_text())
         logger.info("Подхватил сгенерированное меню из кэша при старте")
+        # Если кэш пережил перезапуск и записан сегодня — меню на сегодня уже есть
+        cache_date = datetime.fromtimestamp(TODAY_MENU_CACHE_FILE.stat().st_mtime, TIMEZONE).strftime("%Y-%m-%d")
+        if cache_date == datetime.now(TIMEZONE).strftime("%Y-%m-%d"):
+            DISHES_GENERATED_DATE = cache_date
     except Exception:
         pass
 
@@ -428,6 +432,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     await update.message.reply_text(greeting, reply_markup=menu_keyboard())
+
+
+async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ручной перезапуск генерации меню — только для главы семьи. Нужен,
+    когда деплой/рестарт после GENERATE_HOUR:GENERATE_MINUTE сбросил
+    сегодняшнее меню и мини-апп показывает «Меню ещё не готово»."""
+    user = update.effective_user
+    if not (FAMILY_HEAD_USERNAME and (user.username or "").lower() == FAMILY_HEAD_USERNAME):
+        await update.message.reply_text("Эта команда доступна только главе семьи.")
+        return
+
+    await update.message.reply_text("Генерирую меню на сегодня, это займёт пару минут…")
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    await generate_daily_menu_options(context)
+    if DISHES_GENERATED_DATE == today:
+        await update.message.reply_text(f"Готово: {len(DISHES)} блюд, можно голосовать.")
+    else:
+        await update.message.reply_text(
+            "Не получилось сгенерировать меню (пустые запасы или ошибка "
+            "разбора ответа) — подробности в логах Render."
+        )
 
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1238,6 +1263,7 @@ def main():
     app.add_handler(CommandHandler("shoppinglist", shoppinglist_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("rate", rate_cmd))
+    app.add_handler(CommandHandler("regenmenu", regenmenu_cmd))
     app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
     app.add_handler(CallbackQueryHandler(portion_callback, pattern=r"^portion\|"))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
@@ -1247,6 +1273,14 @@ def main():
         generate_daily_menu_options,
         time=dtime(hour=GENERATE_HOUR, minute=GENERATE_MINUTE, tzinfo=TIMEZONE),
     )
+    # Деплой/рестарт после времени генерации сбрасывает сегодняшнее меню —
+    # догоняем сразу, а не ждём завтрашнего запуска. До этого времени
+    # ничего не делаем: обычная ежедневная задача сработает сама.
+    now = datetime.now(TIMEZONE)
+    generate_time_today = now.replace(hour=GENERATE_HOUR, minute=GENERATE_MINUTE, second=0, microsecond=0)
+    if DISHES_GENERATED_DATE != now.strftime("%Y-%m-%d") and now >= generate_time_today:
+        logger.info("Меню на сегодня ещё не сгенерировано — запускаю генерацию при старте")
+        job_queue.run_once(generate_daily_menu_options, when=0)
     job_queue.run_daily(
         send_evening_reminders, time=dtime(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, tzinfo=TIMEZONE)
     )
