@@ -403,9 +403,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     greeting = (
         f"Привет, {user.first_name}! Записал тебя в список.\n\n"
-        f"Каждый вечер в {REMINDER_HOUR:02d}:{REMINDER_MINUTE:02d} буду присылать кнопку с меню, "
-        "чтобы выбрать, что хочешь на завтрак и ужин. Можешь нажать её и "
-        "сейчас, чтобы попробовать."
+        f"Каждый вечер в {REMINDER_HOUR:02d}:{REMINDER_MINUTE:02d} буду присылать кнопку — меню каждый "
+        "день новое, его придумывает ИИ прямо под то, что реально есть на "
+        "кухне. Выбираешь по одному варианту в каждой категории (завтрак: "
+        "Основное, Мясное, Холодные/Горячие закуски, Гарнир, Суп, Соус, "
+        "Десерт; ужин — то же самое плюс Стартер) — какие-то категории "
+        "обязательные, какие-то нет, форма подскажет.\n\n"
+        f"Если кто-то забудет проголосовать — в {NUDGE_HOUR:02d}:{NUDGE_MINUTE:02d} придёт ещё одно "
+        "личное напоминание, но только тем, кто ещё не проголосовал.\n\n"
+        "После еды можно написать боту /rate — придут кнопки по каждому "
+        "сегодняшнему блюду: понравилось или нет, и хватило ли порции. Это "
+        "помогает ИИ в следующий раз готовить точнее под вкусы семьи.\n\n"
+        "Можешь нажать кнопку голосования и сейчас, чтобы попробовать."
     )
 
     is_family_head = (
@@ -566,23 +575,68 @@ async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def shoppinglist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
+    if not weekly:
+        await update.message.reply_text(
+            "This week's shopping list is empty so far — nothing needed to buy yet."
+        )
+        return
+
+    lines = [
+        f"- {to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}"
+        for name, item in sorted(weekly.items())
+    ]
+    await update.message.reply_text(
+        "This week's shopping list so far:\n" + "\n".join(lines)
+    )
+
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "Here's what this bot does and the commands you might need:\n\n"
-        "Every evening the family votes on tomorrow's menu. Once voting "
-        "closes, you'll get a message here with the winning dishes, scaled "
-        "to the right number of portions, with full step-by-step recipes.\n\n"
+        "Here's how this bot works, start to finish:\n\n"
+        "Every day around 16:45, the bot looks at what's actually in the "
+        "kitchen and asks AI to come up with tonight's and tomorrow's menu "
+        "options — only dishes that can really be made from what's in "
+        "stock. Around 17:30 the family gets a message to vote on their "
+        "favorites (breakfast: Main, Meat, Cold/Hot Appetizer, Side, Soup, "
+        "Sauce, Dessert; dinner: the same categories, plus Starter). "
+        "Anyone who hasn't voted yet gets one more reminder around 18:00. "
+        "By around 18:30, you get this chat's message: the winning dishes, "
+        "scaled to the right number of portions, with full step-by-step "
+        "recipes — that's your instructions for the day.\n\n"
+        "A couple of things worth knowing:\n"
+        "- Portions already include a small buffer for seconds — you don't "
+        "need to add extra yourself.\n"
+        "- If two kids in the family have an early separate breakfast, "
+        "you'll see a short 'EARLY KIDS' BREAKFAST' section at the very "
+        "top of the message — make just that one dish first, before the "
+        "rest of the spread.\n"
+        "- Serving style is buffet: each dish is one big shared platter or "
+        "bowl, not individual plates.\n\n"
         "Commands:\n"
         "/stock — see what's currently in the kitchen\n"
-        "/updatestock — quickly enter what's in the kitchen after a shopping trip\n"
-        "/addstock — add what you just bought, any product, any amount. Just say "
-        "how much you bought — the bot adds it to what's already there, you don't "
-        "need to know or calculate the old total.\n"
+        "/updatestock — open a form to enter what's on hand after a "
+        "shopping trip (shows everything currently tracked, including "
+        "anything you've added with /addstock)\n"
+        "/addstock — add what you just bought, any product, any amount. "
+        "Just say how much you bought — the bot adds it to what's already "
+        "there, you don't need to know or calculate the old total. You "
+        "can paste several lines at once, one product per line.\n"
         "Example: bought 200g of tomatoes? Just send:\n"
         "/addstock tomato 200 g\n"
-        "Works for anything, even something not seen before — just type the name.\n"
-        "/whatstobuy — see what's missing to unlock more dishes from the menu\n"
-        "/rate — rate today's dishes (👍/👎), helps the AI learn what to make again\n"
+        "Works for anything, even something not seen before — just type "
+        "the name.\n"
+        "/removestock <name> — remove a product entirely, in case "
+        "something got added by mistake\n"
+        "/whatstobuy — see what's missing to unlock more dishes from "
+        "today's menu, with exact amounts\n"
+        "/shoppinglist — see the current shopping list accumulated so far "
+        "this week (a fuller version also arrives automatically once a "
+        "week, grouped by store section)\n"
+        "/rate — rate today's dishes (👍/👎 for taste, and whether the "
+        "portion size was right) — this shapes what the AI suggests going "
+        "forward\n"
         "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/help — show this message again"
     )
@@ -1181,6 +1235,7 @@ def main():
     app.add_handler(CommandHandler("updatestock", updatestock_cmd))
     app.add_handler(CommandHandler("restock", restock))
     app.add_handler(CommandHandler("whatstobuy", whatstobuy_cmd))
+    app.add_handler(CommandHandler("shoppinglist", shoppinglist_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("rate", rate_cmd))
     app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
