@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+import zlib
 from collections import Counter
 from datetime import time as dtime, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -88,6 +89,8 @@ DISHES_FILE = BASE_DIR / "dishes.json"
 TODAY_MENU_CACHE_FILE = DATA_DIR / "generated_dishes.json"
 FOOD_PREFERENCES_FILE = DATA_DIR / "food_preferences.json"
 TODAY_SERVED_FILE = DATA_DIR / "today_served.json"
+RECENT_DISHES_FILE = DATA_DIR / "recent_dishes.json"
+RECENT_DISHES_DAYS = int(os.environ.get("RECENT_DISHES_DAYS", "5"))
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -231,6 +234,23 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
             f"{', '.join(too_little_dishes)}.\n"
         )
 
+    recent = load_json(RECENT_DISHES_FILE, [])
+    recent_dish_names = [name for entry in recent for name in entry.get("dishes", [])]
+    recent_note = (
+        f"\n\nЭти блюда уже готовились в последние {RECENT_DISHES_DAYS} дней — "
+        f"не повторяй их снова, придумай другие варианты: "
+        f"{', '.join(recent_dish_names)}.\n" if recent_dish_names else ""
+    )
+
+    egg_variety_note = (
+        "\n\nЕсли основное блюдо на завтрак связано с яйцами — обязательно "
+        "меняй способ приготовления день ото дня: яичница, яйцо пашот, "
+        "яйца-скрэмбл, варёные яйца, омлет, фриттата, яйца бенедикт и "
+        "похожие варианты. Не предлагай один и тот же способ (например, "
+        "омлет) несколько дней подряд — смотри на список недавних блюд выше, "
+        "чтобы понять, что уже было.\n"
+    )
+
     prompt = (
         "Ты — шеф-повар ресторанного уровня. Ниже точный список продуктов, "
         "которые сейчас реально есть на кухне (в граммах/мл/штуках). "
@@ -239,7 +259,7 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         "списке — других заменителей глютена не используй, если их нет "
         "в списке явно).\n\n"
         f"Продукты в наличии:\n{inventory_lines}\n"
-        + dislikes_note + bad_dishes_note + portion_note +
+        + dislikes_note + bad_dishes_note + portion_note + recent_note + egg_variety_note +
         "\nКатегории и сколько вариантов придумать в каждой:\n"
         "Завтрак: main (3), meat (2), cold_starter (2), hot_starter (2), "
         "side (2), soup (2), sauce (2), dessert (2)\n"
@@ -704,32 +724,86 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+def served_tag(served):
+    """Короткий отпечаток списка блюд — Telegram ограничивает callback_data
+    64 байтами, а русское название блюда в UTF-8 легко их превышает, поэтому
+    в кнопку кладём отпечаток списка + индекс блюда, а не само название."""
+    return f"{zlib.crc32('|'.join(served).encode('utf-8')):08x}"
+
+
+def build_rating_keyboard(served):
+    tag = served_tag(served)
+    keyboard = []
+    for i, dish_name in enumerate(served):
+        ref = f"{tag}|{i}"
+        keyboard.append([
+            InlineKeyboardButton(f"👍 {dish_name[:22]}", callback_data=f"rate|up|{ref}"),
+            InlineKeyboardButton("👎", callback_data=f"rate|down|{ref}"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("Too little", callback_data=f"portion|little|{ref}"),
+            InlineKeyboardButton("Just right", callback_data=f"portion|right|{ref}"),
+            InlineKeyboardButton("Too much", callback_data=f"portion|much|{ref}"),
+        ])
+    return InlineKeyboardMarkup(keyboard) if keyboard else None
+
+
+def resolve_rated_dish(ref):
+    """По "tag|index" из кнопки находит название блюда — в сегодняшнем
+    списке или в истории последних дней (карточку могли нажать позже,
+    когда today_served.json уже перезаписан). None — если не нашли."""
+    parts = ref.split("|")
+    if len(parts) != 2 or not parts[1].isdigit():
+        return ref  # старая кнопка с названием блюда прямо в callback_data
+    tag, idx = parts[0], int(parts[1])
+    candidates = [load_json(TODAY_SERVED_FILE, [])]
+    candidates += [entry.get("dishes", []) for entry in reversed(load_json(RECENT_DISHES_FILE, []))]
+    for served in candidates:
+        if served and served_tag(served) == tag and idx < len(served):
+            return served[idx]
+    return None
+
+
 async def rate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        served = load_json(TODAY_SERVED_FILE, [])
+        if not served:
+            await update.message.reply_text("Nothing recorded as served today yet.")
+            return
+        await update.message.reply_text(
+            "How was today's food? Tap to rate each dish:",
+            reply_markup=build_rating_keyboard(served),
+        )
+    except Exception as e:
+        logger.error(f"/rate упал с ошибкой: {e}", exc_info=True)
+        await update.message.reply_text("Something went wrong showing today's dishes — the error has been logged.")
+
+
+async def send_rating_cards(context: ContextTypes.DEFAULT_TYPE):
     served = load_json(TODAY_SERVED_FILE, [])
     if not served:
-        await update.message.reply_text("Nothing recorded as served today yet.")
         return
-    keyboard = []
-    for dish_name in served:
-        keyboard.append([
-            InlineKeyboardButton(f"👍 {dish_name[:22]}", callback_data=f"rate|up|{dish_name}"),
-            InlineKeyboardButton("👎", callback_data=f"rate|down|{dish_name}"),
-        ])
-        keyboard.append([
-            InlineKeyboardButton("Too little", callback_data=f"portion|little|{dish_name}"),
-            InlineKeyboardButton("Just right", callback_data=f"portion|right|{dish_name}"),
-            InlineKeyboardButton("Too much", callback_data=f"portion|much|{dish_name}"),
-        ])
-    await update.message.reply_text(
-        "How was today's food? Tap to rate each dish:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    markup = build_rating_keyboard(served)
+    family = load_family()
+    for user_id in family:
+        try:
+            await context.bot.send_message(
+                chat_id=int(user_id),
+                text="How was today's food? Tap to rate each dish:",
+                reply_markup=markup,
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось отправить карточку оценки {user_id}: {e}")
 
 
 async def rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    _, direction, dish_name = query.data.split("|", 2)
+    _, direction, ref = query.data.split("|", 2)
+    dish_name = resolve_rated_dish(ref)
+    if dish_name is None:
+        await query.edit_message_text("This rating card has expired — use /rate for today's dishes.")
+        return
     prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
     ratings = prefs.setdefault("ratings", {})
     entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
@@ -741,7 +815,11 @@ async def rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def portion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    _, size, dish_name = query.data.split("|", 2)
+    _, size, ref = query.data.split("|", 2)
+    dish_name = resolve_rated_dish(ref)
+    if dish_name is None:
+        await query.edit_message_text("This rating card has expired — use /rate for today's dishes.")
+        return
     prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
     ratings = prefs.setdefault("ratings", {})
     entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
@@ -991,6 +1069,14 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     for course_data in menu["dinner"].values():
         served_names.append(DISHES[course_data["dish_id"]]["name"])
     save_json(TODAY_SERVED_FILE, served_names)
+
+    recent = load_json(RECENT_DISHES_FILE, [])
+    today_str = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    # Повторная сборка в тот же день (/forcecompile) заменяет запись, а не дублирует
+    recent = [entry for entry in recent if entry.get("date") != today_str]
+    recent.append({"date": today_str, "dishes": served_names})
+    recent = recent[-RECENT_DISHES_DAYS:]  # храним только последние N дней
+    save_json(RECENT_DISHES_FILE, recent)
 
     def format_voters(voters):
         labels = []
@@ -1337,6 +1423,10 @@ def main():
     )
     job_queue.run_daily(
         nudge_non_voters,
+        time=dtime(hour=NUDGE_HOUR, minute=NUDGE_MINUTE, tzinfo=TIMEZONE),
+    )
+    job_queue.run_daily(
+        send_rating_cards,
         time=dtime(hour=NUDGE_HOUR, minute=NUDGE_MINUTE, tzinfo=TIMEZONE),
     )
     job_queue.run_daily(
