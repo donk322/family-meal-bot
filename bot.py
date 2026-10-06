@@ -1,10 +1,12 @@
 import os
+import difflib
+import html
 import json
 import logging
 import threading
 import zlib
 from collections import Counter
-from datetime import time as dtime, datetime
+from datetime import time as dtime, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -88,8 +90,10 @@ WEEKLY_SHORTFALL_FILE = DATA_DIR / "weekly_shortfall.json"
 DISHES_FILE = BASE_DIR / "dishes.json"
 TODAY_MENU_CACHE_FILE = DATA_DIR / "generated_dishes.json"
 FOOD_PREFERENCES_FILE = DATA_DIR / "food_preferences.json"
-TODAY_SERVED_FILE = DATA_DIR / "today_served.json"
+SERVED_BY_DATE_FILE = DATA_DIR / "served_by_date.json"  # {"YYYY-MM-DD": [{"name", "meal"}, ...]}
+SERVED_KEEP_DAYS = 7
 RECENT_DISHES_FILE = DATA_DIR / "recent_dishes.json"
+RATED_TODAY_FILE = DATA_DIR / "rated_today.json"  # {"date": "YYYY-MM-DD", "users": ["123", ...]}
 RECENT_DISHES_DAYS = int(os.environ.get("RECENT_DISHES_DAYS", "5"))
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -182,6 +186,143 @@ def build_ingredient_typical_usage():
 
 INGREDIENT_TYPICAL_USAGE = build_ingredient_typical_usage()
 
+FAMILY_FAVORITES_NOTE = (
+    "\n\nСемья любит эти блюда и продукты. Старайся выбирать идеи "
+    "отсюда, если хватает продуктов в запасах (можно не дословно, а "
+    "близко по смыслу): бекон; куриные ножки, бёдра, крылышки, филе; "
+    "котлеты из говядины, свинины или курицы; бургеры (без булки или "
+    "на безглютеновом хлебе); жареные грибы; жареная цветная капуста; "
+    "лапша ширатаки с овощами на сковороде; мясной салат (авокадо "
+    "вместо картошки); сырный салат; стейк говяжий; тонко нарезанные "
+    "кусочки говядины; свекольный салат с чесноком и майонезом; яйца "
+    "варёные с майонезом; борщ; щи; сырный суп; суп с фрикадельками; "
+    "фаршированные перцы; грибы с начинкой из крем-сыра и пармезана; "
+    "сырники с крем-сыром; блинчики с крем-сыром; творожная "
+    "запеканка; жареный халуми. Сложные блюда из этого списка "
+    "(фаршированные перцы, грибы с начинкой, суп с фрикадельками) "
+    "предлагай только в максимально упрощённом виде или пропусти.\n"
+)
+
+BREAKFAST_NOTE = (
+    "\n\nПРАВИЛА ДЛЯ ЗАВТРАКА. Завтрак самый важный и самый сытный "
+    "приём пищи в этой семье, они едят после тренировки. Поэтому: "
+    "1) Все блюда завтрака высокобелковые и плотные: яйца, мясо, "
+    "птица, рыба, сыр, субпродукты, в больших порциях. "
+    "2) Никаких крахмалистых углеводов на завтрак: картофель, рис, "
+    "макароны, лапша, гречка, любые крупы и каши. Хлеб допустим только "
+    "как небольшая часть блюда, не как основа. "
+    "3) Гарнир на завтрак овощной или белковый (жареные грибы, "
+    "цветная капуста, овощи, авокадо, бекон), не крахмальный. "
+    "4) Супа на завтрак нет. "
+    "5) Десерт на завтрак может быть сладким лакомством, это нормально, "
+    "но простым.\n"
+)
+
+BANANA_NOTE = (
+    "\n\nБананы используй очень редко, а в десертах особенно: только "
+    "если больше нечего предложить. Предпочитай ягоды, греческий "
+    "йогурт, орехи, мёд.\n"
+)
+
+LATIN_TO_CYRILLIC = str.maketrans(
+    "aceopxykmtbhACEOPXYKMTBH",
+    "асеорхукмтвнАСЕОРХУКМТВН",
+)
+
+
+def fix_mixed_script(name):
+    """Заменяет латинские буквы, похожие на русские, на русские — но только
+    в словах, где уже есть кириллица («укроp» → «укроп»). Чисто латинские
+    названия (повар мог добавить продукт по-английски) не трогает."""
+    return " ".join(
+        word.translate(LATIN_TO_CYRILLIC)
+        if any(is_cyrillic(ch) for ch in word) else word
+        for word in name.split(" ")
+    )
+
+
+def is_cyrillic(ch):
+    return "а" <= ch.lower() <= "я" or ch.lower() == "ё"
+
+
+def match_latin_as_wildcard(name, known):
+    """Запасной вариант для опечаток вида «укроp», где латинская буква стоит
+    не вместо похожей русской, а вместо другой (p вместо п): латинские буквы
+    внутри русского слова считаются любой буквой. Возвращает название из
+    known, только если подходит ровно одно."""
+    if not any(is_cyrillic(ch) for ch in name):
+        return None
+    candidates = [
+        k for k in known
+        if len(k) == len(name)
+        and all(a == b or (a.isascii() and a.isalpha()) for a, b in zip(name, k))
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def check_generated_ingredients(generated, inventory):
+    """Сверяет названия ингредиентов сгенерированных блюд с запасами.
+    Латинские буквы внутри русских слов сначала заменяются на русские,
+    почти совпавшее название (опечатка) заменяется на название из запасов;
+    блюдо с ингредиентом, которого нет ни в запасах, ни среди бытовых,
+    выбрасывается. Несовпадение единицы с запасами только пишется в лог."""
+    known = list(inventory) + sorted(PANTRY_STAPLES | {"вода"})
+    checked = {}
+    for dish_id, dish in generated.items():
+        unknown = []
+        for ing in dish.get("ingredients", []):
+            name = fix_mixed_script(ing["name"])
+            match = difflib.get_close_matches(name, known, n=1, cutoff=0.85)
+            if not match:
+                wildcard = match_latin_as_wildcard(ing["name"], known)
+                match = [wildcard] if wildcard else []
+            if not match:
+                unknown.append(ing["name"])
+                continue
+            if match[0] != ing["name"]:
+                logger.info(f"{dish_id}: ингредиент «{ing['name']}» → «{match[0]}»")
+                ing["name"] = match[0]
+            stock_unit = inventory.get(ing["name"], {}).get("unit")
+            if stock_unit and ing.get("unit") != stock_unit:
+                logger.warning(
+                    f"{dish_id}: единица у «{ing['name']}» — {ing.get('unit')}, "
+                    f"а в запасах — {stock_unit}"
+                )
+        if unknown:
+            logger.warning(f"Выбрасываю {dish_id} ({dish.get('name')}): нет в запасах {unknown}")
+            continue
+        checked[dish_id] = dish
+    return checked
+
+
+# Hand-written dishes from the static catalog, shown to Claude as the target
+# level of detail and simplicity (chicken with vegetables is left out on
+# purpose: the cook doesn't make it well).
+REFERENCE_DISH_IDS = [
+    "breakfast_bacon_eggs",
+    "breakfast_steak_eggs",
+    "breakfast_chicken_thigh_pan",
+    "dinner_chicken_patties_mash",
+    "dinner_pork_patties",
+    "dinner_starter_borscht",
+]
+
+
+def build_reference_text():
+    try:
+        static = json.loads(DISHES_FILE.read_text())
+    except Exception:
+        return ""
+    reference = {k: static[k] for k in REFERENCE_DISH_IDS if k in static}
+    if not reference:
+        return ""
+    return (
+        "\n\nВот примеры рецептов нужного уровня. Бери с них пример "
+        "по детализации и простоте шагов (не копируй сами блюда):\n"
+        + json.dumps(reference, ensure_ascii=False, indent=1)
+        + "\n"
+    )
+
 
 async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
     """Раз в день, перед вечерним напоминанием, просит Claude придумать
@@ -214,6 +355,12 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         f"и не предлагай что-то очень похожее: {', '.join(disliked_dishes)}.\n"
         if disliked_dishes else ""
     )
+    liked_dishes = [name for name, r in ratings.items()
+                    if r.get("up", 0) > r.get("down", 0)]
+    liked_note = (
+        f"\nЭти блюда семье понравились. Делай что-то в таком же духе: "
+        f"{', '.join(liked_dishes)}.\n" if liked_dishes else ""
+    )
 
     too_much_dishes = [name for name, r in ratings.items()
                        if r.get("portion_much", 0) > r.get("portion_right", 0) + r.get("portion_little", 0)]
@@ -244,28 +391,72 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
 
     egg_variety_note = (
         "\n\nЕсли основное блюдо на завтрак связано с яйцами — обязательно "
-        "меняй способ приготовления день ото дня: яичница, яйцо пашот, "
-        "яйца-скрэмбл, варёные яйца, омлет, фриттата, яйца бенедикт и "
-        "похожие варианты. Не предлагай один и тот же способ (например, "
+        "меняй способ приготовления день ото дня: яичница, яйца-скрэмбл, "
+        "варёные яйца, омлет, фриттата, запечённые в духовке яйца и "
+        "похожие простые варианты. Не предлагай один и тот же способ (например, "
         "омлет) несколько дней подряд — смотри на список недавних блюд выше, "
         "чтобы понять, что уже было.\n"
     )
 
     prompt = (
-        "Ты — шеф-повар ресторанного уровня. Ниже точный список продуктов, "
-        "которые сейчас реально есть на кухне (в граммах/мл/штуках). "
-        "Придумай меню на завтра для семьи на 7 человек, без глютена "
+        "Ты составляешь меню для семьи на 7 человек. Готовит человек без "
+        "кулинарного опыта, который делает ровно то, что написано, и не "
+        "понимает ничего «на глаз». Нужны простые, знакомые, вкусные блюда, "
+        "а не ресторанные эксперименты. Качество важнее количества и "
+        "оригинальности: предлагай только то, в чём уверен, что оно "
+        "получится вкусным при простом исполнении.\n\n"
+        "Ниже точный список продуктов, которые сейчас реально есть на "
+        "кухне (в граммах/мл/штуках). Придумай меню на завтра без глютена "
         "(кроме их собственного безглютенового хлеба, если он есть в "
         "списке — других заменителей глютена не используй, если их нет "
         "в списке явно).\n\n"
         f"Продукты в наличии:\n{inventory_lines}\n"
-        + dislikes_note + bad_dishes_note + portion_note + recent_note + egg_variety_note +
+        + FAMILY_FAVORITES_NOTE + build_reference_text()
+        + BREAKFAST_NOTE + BANANA_NOTE
+        + dislikes_note + bad_dishes_note + liked_note + portion_note
+        + recent_note + egg_variety_note +
         "\nКатегории и сколько вариантов придумать в каждой:\n"
-        "Завтрак: main (3), meat (2), cold_starter (2), hot_starter (2), "
-        "side (2), soup (2), sauce (2), dessert (2)\n"
-        "Ужин: starter (2), hot_starter (2), soup (2), main (3), side (2), "
-        "sauce (2), dessert (2)\n\n"
-        "СТРОГИЕ правила:\n"
+        "Завтрак: main (3 варианта), meat (2), cold_starter (1), "
+        "hot_starter (1), side (1), sauce (1), dessert (1). Категории soup "
+        "на завтрак НЕТ, блюда breakfast/soup не генерируй вообще.\n"
+        "Ужин: starter (1), hot_starter (1), soup (1), main (3), side (2), "
+        "sauce (1), dessert (1).\n\n"
+        "Обязательные категории (main и meat на завтрак, main и side на "
+        "ужин) пропускать нельзя. Для необязательных: если нет "
+        "по-настоящему хорошего простого блюда из имеющихся продуктов, "
+        "просто не включай ни одного блюда этой категории в ответ вместо "
+        "слабого блюда.\n\n"
+        "ПРАВИЛА ПРОСТОТЫ (обязательны):\n"
+        "1. Только знакомые домашние блюда и техники: пожарить на "
+        "сковороде, сварить, запечь в духовке, потушить, нарезать, "
+        "перемешать.\n"
+        "2. Нельзя: сырая говядина или рыба как готовое блюдо (карпаччо, "
+        "тартар), яйца пашот, муссы и кремы, взбитые сливки, "
+        "соусы-эмульсии, фламбе, карамелизация сахара, любые «шеф-приёмы».\n"
+        "3. Из техники допустимы только: плита, сковорода, кастрюля, "
+        "духовка, нож, доска, ложка, лопатка, тёрка, шумовка, дуршлаг, "
+        "миска. Не требуй блендер, миксер, "
+        "кухонный термометр, гриль-сковороду. Супы только непротёртые.\n"
+        "4. Не больше 8 ингредиентов (соль, перец, масло, сухие специи не "
+        "считаются) и не больше 10 шагов в рецепте. Один шаг — одно "
+        "действие: не «нарежьте курицу, картофель и лук», а отдельный шаг "
+        "на каждый продукт.\n"
+        "5. Всегда точные количества, никаких «по вкусу». Меры только "
+        "бытовые: столовая ложка (15 мл), чайная ложка (5 мл), минуты, "
+        "цвет или признак готовности («до золотистой корочки», «пока не "
+        "исчезнет розовый цвет внутри»). Соль, чёрный перец и специи тоже "
+        "с количеством прямо в шаге: не «посолите и поперчите», а "
+        "«добавьте 1/4 чайной ложки соли и щепотку чёрного перца».\n"
+        "6. В каждом шаге: что делать, на каком огне, сколько минут, как "
+        "понять, что готово.\n"
+        "7. Всегда конкретное название продукта: какой именно сыр "
+        "(пармезан или чеддер), какой именно лук, какая именно часть "
+        "курицы. Не просто «сыр» или «зелень».\n"
+        "8. Названия блюд простые и понятные, без витиеватых.\n"
+        "9. Все количества в шагах рецепта (граммы, мл воды, ложки, штуки) "
+        "пиши на ОДНУ порцию, так же как amount_per_serving в ingredients. "
+        "На нужное число порций их пересчитают при отправке повару.\n\n"
+        "СТРОГИЕ правила по продуктам:\n"
         "1. Каждое блюдо должно быть реально приготовимо ИЗ ТОГО, ЧТО ЕСТЬ "
         "В СПИСКЕ ВЫШЕ — не придумывай ингредиенты, которых там нет, "
         "кроме соли, чёрного перца, растительного/оливкового масла и "
@@ -275,14 +466,12 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         "2. Названия ингредиентов в поле \"ingredients\" должны СОВПАДАТЬ "
         "БУКВАЛЬНО с названиями из списка продуктов выше — то же слово, "
         "тот же регистр, никаких синонимов.\n"
-        "3. Не предлагай блюдо, для которого на одну порцию нужно больше "
+        "3. Единица (unit) ингредиента должна быть ТОЧНО той, что указана у "
+        "этого продукта в списке выше: если лук, чеснок, перец или морковь "
+        "в запасах в граммах, пиши их в граммах (например, 40 г лука), а не "
+        "«0.3 шт». Воду в ingredients не включай.\n"
+        "4. Не предлагай блюдо, для которого на одну порцию нужно больше "
         "конкретного продукта, чем реально есть в наличии.\n"
-        "4. Рецепты — ресторанного уровня по вкусу, но объясни ПРЕДЕЛЬНО "
-        "подробно и по шагам, как для человека, который совсем не умеет "
-        "готовить: точное время, температура, признаки готовности. "
-        "Называй конкретный продукт точно (например «чеддер», а не "
-        "просто «сыр», если в списке есть и чеддер, и пармезан — не "
-        "путай их).\n"
         "5. Все блюда без глютена.\n\n"
         "Верни ТОЛЬКО валидный JSON, без какого-либо текста до или после, "
         "в виде плоского словаря id -> блюдо, в точности такой структуры "
@@ -296,16 +485,16 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         '"recipe_steps": ["..."], "serving_note": "..."},\n'
         '  "b_meat_1": {"name": "...", "meal_type": "breakfast", '
         '"course": "meat", ...},\n'
-        "  ... (аналогично для cold_starter, hot_starter, side, soup, "
-        "sauce, dessert на завтрак, у каждого course = точное название "
-        "категории)\n"
+        "  ... (аналогично для cold_starter, hot_starter, side, sauce, "
+        "dessert на завтрак, у каждого блюда, включая main, course = "
+        "точное название категории)\n"
         '  "d_starter_1": {"name": "...", "meal_type": "dinner", '
         '"course": "starter", ...},\n'
         "  ... (аналогично для hot_starter, soup, main, side, sauce, "
         "dessert на ужин)\n"
         "}\n\n"
         "id — короткий уникальный идентификатор латиницей вида "
-        '"b_main_1", "d_soup_2" (b_ для завтрака, d_ для ужина, дальше '
+        '"b_main_1", "d_soup_1" (b_ для завтрака, d_ для ужина, дальше '
         "название категории и номер по порядку)."
     )
 
@@ -340,6 +529,11 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         generated = json.loads(text)
     except json.JSONDecodeError as e:
         logger.error(f"Не удалось распарсить сгенерированное меню: {e}. Оставляю прошлый DISHES.")
+        return
+
+    generated = check_generated_ingredients(generated, inventory)
+    if not generated:
+        logger.error("После сверки с запасами не осталось ни одного блюда. Оставляю прошлый DISHES.")
         return
 
     global DISHES_GENERATED_DATE
@@ -731,69 +925,229 @@ def served_tag(served):
     return f"{zlib.crc32('|'.join(served).encode('utf-8')):08x}"
 
 
-def build_rating_keyboard(served):
-    tag = served_tag(served)
-    keyboard = []
-    for i, dish_name in enumerate(served):
-        ref = f"{tag}|{i}"
-        keyboard.append([
-            InlineKeyboardButton(f"👍 {dish_name[:22]}", callback_data=f"rate|up|{ref}"),
-            InlineKeyboardButton("👎", callback_data=f"rate|down|{ref}"),
-        ])
-        keyboard.append([
-            InlineKeyboardButton("Too little", callback_data=f"portion|little|{ref}"),
-            InlineKeyboardButton("Just right", callback_data=f"portion|right|{ref}"),
-            InlineKeyboardButton("Too much", callback_data=f"portion|much|{ref}"),
-        ])
-    return InlineKeyboardMarkup(keyboard) if keyboard else None
+def normalize_served(entries):
+    """Список блюд раньше хранился как список названий, теперь — как список
+    {"name", "meal"}. Принимает оба формата, для старых строк meal = None."""
+    result = []
+    for entry in entries or []:
+        if isinstance(entry, str):
+            result.append({"name": entry, "meal": None})
+        elif isinstance(entry, dict) and entry.get("name"):
+            result.append({"name": entry["name"], "meal": entry.get("meal")})
+    return result
+
+
+def load_served(date):
+    """Блюда, которые готовятся на дату date ("YYYY-MM-DD")."""
+    return normalize_served(load_json(SERVED_BY_DATE_FILE, {}).get(date, []))
+
+
+def save_served(date, served):
+    by_date = load_json(SERVED_BY_DATE_FILE, {})
+    by_date[date] = served
+    keep = sorted(by_date)[-SERVED_KEEP_DAYS:]
+    save_json(SERVED_BY_DATE_FILE, {d: by_date[d] for d in keep})
+
+
+def served_names_tag(served):
+    """Отпечаток считается только по названиям — так он совпадает для старого
+    и нового формата списка блюд, и старые кнопки продолжают работать."""
+    return served_tag([entry["name"] for entry in served])
 
 
 def resolve_rated_dish(ref):
-    """По "tag|index" из кнопки находит название блюда — в сегодняшнем
-    списке или в истории последних дней (карточку могли нажать позже,
-    когда today_served.json уже перезаписан). None — если не нашли."""
+    """По "tag|index" из кнопки находит название блюда — в списках блюд по
+    датам или в истории последних дней (карточку могли нажать через
+    несколько дней). None — если не нашли."""
     parts = ref.split("|")
     if len(parts) != 2 or not parts[1].isdigit():
         return ref  # старая кнопка с названием блюда прямо в callback_data
     tag, idx = parts[0], int(parts[1])
-    candidates = [load_json(TODAY_SERVED_FILE, [])]
-    candidates += [entry.get("dishes", []) for entry in reversed(load_json(RECENT_DISHES_FILE, []))]
+    by_date = load_json(SERVED_BY_DATE_FILE, {})
+    candidates = [normalize_served(by_date[d]) for d in sorted(by_date, reverse=True)]
+    candidates += [normalize_served(entry.get("dishes", []))
+                   for entry in reversed(load_json(RECENT_DISHES_FILE, []))]
     for served in candidates:
-        if served and served_tag(served) == tag and idx < len(served):
-            return served[idx]
+        if served and served_names_tag(served) == tag and idx < len(served):
+            return served[idx]["name"]
     return None
+
+
+def record_rating(dish_name, key):
+    """key — up / down / portion_little / portion_right / portion_much."""
+    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
+    ratings = prefs.setdefault("ratings", {})
+    entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
+    entry[key] = entry.get(key, 0) + 1
+    save_json(FOOD_PREFERENCES_FILE, prefs)
+
+
+def load_rated(date):
+    """Кто уже прошёл оценку блюд за date — чтобы повторный /rate не задвоил голоса."""
+    data = load_json(RATED_TODAY_FILE, {})
+    if data.get("date") != date:
+        return set()
+    return set(data.get("users", []))
+
+
+def mark_rated(user_id, date):
+    users = load_rated(date)
+    users.add(str(user_id))
+    save_json(RATED_TODAY_FILE, {"date": date, "users": sorted(users)})
+
+
+MEAL_HEADERS = {"breakfast": "🍳 Завтрак", "dinner": "🍽 Ужин"}
+RATE_INTRO = "Как вам сегодняшняя еда? Оцените блюда, это займёт минуту."
+RATE_DONE_TEXT = "✅ <b>Готово!</b> Спасибо, так меню станет вкуснее с каждым днём."
+RATE_STALE_TEXT = "Эта карточка устарела. Напишите /rate."
+RATE_ALREADY_TEXT = "Вы уже оценили сегодняшние блюда, спасибо! 🙌"
+
+
+def build_taste_card(served, i, intro=None):
+    """Шаг 1 для блюда i: текст карточки (HTML) и кнопки вкуса."""
+    dish = served[i]
+    counter = f"блюдо {i + 1} из {len(served)}"
+    header = MEAL_HEADERS.get(dish["meal"])
+    lines = []
+    if intro:
+        lines += [intro, ""]
+    lines += [
+        f"<b>{header}</b> · {counter}" if header else counter.capitalize(),
+        "",
+        f"<b>{html.escape(dish['name'])}</b>",
+        "",
+        "Как вам?",
+    ]
+    ref = f"{served_names_tag(served)}|{i}"
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👍 Вкусно", callback_data=f"rt|{ref}|up"),
+            InlineKeyboardButton("👎 Не очень", callback_data=f"rt|{ref}|down"),
+        ],
+        [InlineKeyboardButton("Пропустить →", callback_data=f"rt|{ref}|skip")],
+    ])
+    return "\n".join(lines), markup
+
+
+def build_portion_card(served, i):
+    """Шаг 2 для блюда i: текст карточки (HTML) и кнопки порции."""
+    text = f"<b>{html.escape(served[i]['name'])}</b>\n\nКакой была порция?"
+    ref = f"{served_names_tag(served)}|{i}"
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Маловато", callback_data=f"rp|{ref}|little"),
+            InlineKeyboardButton("В самый раз", callback_data=f"rp|{ref}|right"),
+            InlineKeyboardButton("Многовато", callback_data=f"rp|{ref}|much"),
+        ],
+        [InlineKeyboardButton("Пропустить →", callback_data=f"rp|{ref}|skip")],
+    ])
+    return text, markup
+
+
+async def show_next_dish(query, served, i, date):
+    """Перерисовывает карточку на шаг 1 блюда i, а если блюда кончились —
+    на финальное «Готово» и запоминает, что человек оценку за date прошёл."""
+    if i < len(served):
+        text, markup = build_taste_card(served, i)
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    else:
+        mark_rated(query.from_user.id, date)
+        await query.edit_message_text(RATE_DONE_TEXT, parse_mode="HTML")
+
+
+def parse_rating_button(data, served):
+    """Разбирает "rt|fp|i|v" / "rp|fp|i|v". Возвращает (i, v) или None,
+    если карточка не относится к сегодняшнему списку блюд."""
+    parts = data.split("|")
+    if len(parts) != 4 or not parts[2].isdigit():
+        return None
+    _, tag, idx, value = parts
+    i = int(idx)
+    if not served or served_names_tag(served) != tag or i >= len(served):
+        return None
+    return i, value
 
 
 async def rate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        served = load_json(TODAY_SERVED_FILE, [])
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        served = load_served(today)
         if not served:
-            await update.message.reply_text("Nothing recorded as served today yet.")
+            await update.message.reply_text("Сегодня ещё нечего оценивать.")
             return
-        await update.message.reply_text(
-            "How was today's food? Tap to rate each dish:",
-            reply_markup=build_rating_keyboard(served),
-        )
+        if str(update.effective_user.id) in load_rated(today):
+            await update.message.reply_text(RATE_ALREADY_TEXT)
+            return
+        text, markup = build_taste_card(served, 0)
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
     except Exception as e:
         logger.error(f"/rate упал с ошибкой: {e}", exc_info=True)
         await update.message.reply_text("Something went wrong showing today's dishes — the error has been logged.")
 
 
 async def send_rating_cards(context: ContextTypes.DEFAULT_TYPE):
-    served = load_json(TODAY_SERVED_FILE, [])
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    served = load_served(today)
     if not served:
         return
-    markup = build_rating_keyboard(served)
+    text, markup = build_taste_card(served, 0, intro=RATE_INTRO)
+    already_rated = load_rated(today)
     family = load_family()
     for user_id in family:
+        if str(user_id) in already_rated:
+            continue
         try:
             await context.bot.send_message(
                 chat_id=int(user_id),
-                text="How was today's food? Tap to rate each dish:",
+                text=text,
+                parse_mode="HTML",
                 reply_markup=markup,
             )
         except Exception as e:
             logger.warning(f"Не удалось отправить карточку оценки {user_id}: {e}")
+
+
+async def rate_taste_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    served = load_served(today)
+    parsed = parse_rating_button(query.data, served)
+    if parsed is None:
+        await query.edit_message_text(RATE_STALE_TEXT)
+        return
+    if str(query.from_user.id) in load_rated(today):
+        await query.edit_message_text(RATE_ALREADY_TEXT)
+        return
+    i, value = parsed
+    if value == "skip":
+        await show_next_dish(query, served, i + 1, today)
+        return
+    if value not in ("up", "down"):
+        return
+    record_rating(served[i]["name"], value)
+    text, markup = build_portion_card(served, i)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def rate_portion_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    served = load_served(today)
+    parsed = parse_rating_button(query.data, served)
+    if parsed is None:
+        await query.edit_message_text(RATE_STALE_TEXT)
+        return
+    if str(query.from_user.id) in load_rated(today):
+        await query.edit_message_text(RATE_ALREADY_TEXT)
+        return
+    i, value = parsed
+    if value in ("little", "right", "much"):
+        record_rating(served[i]["name"], f"portion_{value}")
+    elif value != "skip":
+        return
+    await show_next_dish(query, served, i + 1, today)
 
 
 async def rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -804,11 +1158,7 @@ async def rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if dish_name is None:
         await query.edit_message_text("This rating card has expired — use /rate for today's dishes.")
         return
-    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
-    ratings = prefs.setdefault("ratings", {})
-    entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
-    entry[direction] = entry.get(direction, 0) + 1
-    save_json(FOOD_PREFERENCES_FILE, prefs)
+    record_rating(dish_name, direction)
     await query.edit_message_text(f"Thanks! Recorded your rating for {dish_name}.")
 
 
@@ -820,12 +1170,7 @@ async def portion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if dish_name is None:
         await query.edit_message_text("This rating card has expired — use /rate for today's dishes.")
         return
-    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
-    ratings = prefs.setdefault("ratings", {})
-    entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
-    key = f"portion_{size}"  # portion_little / portion_right / portion_much
-    entry[key] = entry.get(key, 0) + 1
-    save_json(FOOD_PREFERENCES_FILE, prefs)
+    record_rating(dish_name, f"portion_{size}")  # portion_little / portion_right / portion_much
     await query.edit_message_text(f"Thanks! Recorded portion feedback for {dish_name}.")
 
 
@@ -1063,12 +1408,15 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Голосов нет — пропускаю сборку")
         return
 
-    served_names = []
-    for course_data in menu["breakfast"].values():
-        served_names.append(DISHES[course_data["dish_id"]]["name"])
-    for course_data in menu["dinner"].values():
-        served_names.append(DISHES[course_data["dish_id"]]["name"])
-    save_json(TODAY_SERVED_FILE, served_names)
+    served = []
+    for meal in ("breakfast", "dinner"):
+        for course_data in menu[meal].values():
+            served.append({"name": DISHES[course_data["dish_id"]]["name"], "meal": meal})
+    # Сборка вечером собирает меню на завтра — /rate и карточки в 18:00
+    # завтра будут читать именно этот ключ.
+    tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
+    save_served(tomorrow, served)
+    served_names = [entry["name"] for entry in served]
 
     recent = load_json(RECENT_DISHES_FILE, [])
     today_str = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
@@ -1194,6 +1542,11 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         "Все блюда без глютена — уже учтено в рецептах ниже, не меняй "
         "ингредиенты и их количество (уже пересчитаны на нужное число "
         "порций).\n\n"
+        "А вот количества внутри шагов приготовления (граммы, мл воды, "
+        "ложки соли и специй, штуки) написаны на ОДНУ порцию — пересчитай "
+        "их на число порций, указанное у блюда («на N порций»), и пиши в "
+        "шагах уже итоговое количество. Время и температуру не "
+        "пересчитывай.\n\n"
         "Повар не очень опытный — сохраняй ВСЕ шаги приготовления дословно и "
         "по порядку, ничего не сокращай и не объединяй в более общие фразы. "
         "Рецепты специально написаны подробно (точное время, температура, "
@@ -1403,6 +1756,8 @@ def main():
     app.add_handler(CommandHandler("forcecompile", forcecompile_cmd))
     app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
     app.add_handler(CallbackQueryHandler(portion_callback, pattern=r"^portion\|"))
+    app.add_handler(CallbackQueryHandler(rate_taste_cb, pattern=r"^rt\|"))
+    app.add_handler(CallbackQueryHandler(rate_portion_cb, pattern=r"^rp\|"))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
