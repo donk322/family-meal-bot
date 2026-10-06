@@ -54,9 +54,14 @@
     color: var(--accent);
   }
   .optional-tag {
-    font-size: 11px;
-    color: var(--tg-theme-hint-color, #999);
-    margin: 0 0 12px;
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 700;
+    color: #ffffff;
+    background: var(--accent);
+    padding: 3px 12px;
+    border-radius: 12px;
+    margin: 4px 0 12px;
   }
   .dish-card {
     display: flex;
@@ -135,7 +140,6 @@
       { key: 'cold_starter', label: 'Холодные закуски (завтрак)', required: false, emoji: '🥗' },
       { key: 'hot_starter', label: 'Горячие закуски (завтрак)', required: false, emoji: '🥑' },
       { key: 'side', label: 'Гарнир на завтрак', required: false, emoji: '🥔' },
-      { key: 'soup', label: 'Суп на завтрак', required: false, emoji: '🍲' },
       { key: 'sauce', label: 'Соус (завтрак)', required: false, emoji: '🥣' },
       { key: 'dessert', label: 'Десерт на завтрак', required: false, emoji: '🍎' },
     ],
