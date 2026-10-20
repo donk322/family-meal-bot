@@ -1474,7 +1474,7 @@ HOW TO USE THIS
 • Do ONE step at a time. Do not skip steps.
 • Times are minutes before serving. "T" = the moment the family sits down to eat.
 • Serving style is buffet: each dish goes on ONE big platter or bowl in the middle of the table. Only dishes marked "plated separately" go on their own plate.
-• Quantities already include a little extra for seconds.
+• Quantities already include a few extra portions for seconds.
 • Measures: 1 tablespoon = 15 ml, 1 teaspoon = 5 ml.
 
 🧰 YOU WILL NEED (check before you start)
@@ -1522,6 +1522,9 @@ RULES FOR THE CONTENT
 15. DONENESS: count the doneness requests per level; portions without a request are medium. Write one line such as "Steaks: 2 x medium-rare (52°C), 6 x medium (55°C), 1 x well done (65°C)" and group the batches by doneness ("Batch 1: 3 steaks, medium, take off at 55°C"). Describe batches in pieces, not grams. Never say who asked for what.
 16. TIMES: the duration in a dish header matches its steps; "Start at T minus X" is at least the duration plus 5 minutes; the times in the countdown match the dish headers.
 17. ORDER: sections go early kids' breakfast, regular breakfast, breakfast for one person, dinner, dinner for one person. The dinner for one person comes AFTER the last shared dinner dish and BEFORE the dinner final check.
+18. SALTED WATER: whenever a step uses water for boiling, give the salt for it: "add 1 teaspoon of salt per litre of water".
+19. IN ADVANCE: never write "in advance", "beforehand" or "ahead of time" without minutes. Write "take the steaks out of the fridge 30 minutes before cooking".
+20. DURATION: the duration in a dish header = prep time + number of batches x time of one batch. Use these batch times: bacon 9 minutes, eggs 4 minutes, steaks 11 minutes, mushrooms 11 minutes. The dish starts in the countdown at its duration + 5 minutes ("⏱ 35 minutes" means "Start at T minus 40 min" or earlier).
 
 FORMAT (follow exactly; replace the examples with today's real dishes)
 
@@ -1622,6 +1625,8 @@ def pack_messages(pieces, limit=TG_LIMIT):
 # Dish headers in the cook message end with "— serves N"; section headers say "(N people)".
 COOK_DISH_LINE = re.compile(r"[—–-]\s*serves \d+\s*$", re.MULTILINE)
 VAGUE_PHRASES = ["to taste", "a little", "a bit of", "as needed", "adjust", "as much as"]
+# Строка под заголовком блюда: «⏱ N minutes ... Start at T minus M min».
+COOK_TIME_LINE = re.compile(r"⏱\s*(\d+)\s*min.*?Start at T minus (\d+)\s*min", re.IGNORECASE)
 
 
 def check_cook_text(text):
@@ -1630,9 +1635,31 @@ def check_cook_text(text):
     return len(COOK_DISH_LINE.findall(text)), [p for p in VAGUE_PHRASES if p in lowered]
 
 
-def describe_cook_problems(dish_count, expected_dishes, vague):
+def check_cook_timing(text):
+    """Блюда, которые начинают меньше чем за длительность + 5 минут до подачи:
+    список (название, длительность N, старт M) по строкам «⏱ N minutes ...
+    Start at T minus M min» под заголовками блюд."""
+    late, dish = [], None
+    for line in text.splitlines():
+        if COOK_DISH_LINE.search(line):
+            dish = re.sub(r"^\W+", "", COOK_DISH_LINE.sub("", line)).strip()  # без эмодзи
+            continue
+        m = COOK_TIME_LINE.search(line)
+        if m and dish:
+            duration, start = int(m.group(1)), int(m.group(2))
+            if start < duration + 5:
+                late.append((dish, duration, start))
+    return late
+
+
+def describe_cook_problems(dish_count, expected_dishes, vague, late=()):
     """Перечень проблем черновика по-английски — для повторного запроса к ИИ."""
     problems = []
+    for dish, duration, start in late:
+        problems.append(
+            f"- Dish {dish}: it takes {duration} minutes but starts only {start} "
+            f"minutes before serving, start at least {duration + 5} minutes before"
+        )
     if dish_count != expected_dishes:
         problems.append(
             f"- The message has {dish_count} dishes (lines ending with \"— serves N\"), "
@@ -1843,11 +1870,14 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     if await cut_off(recipe_text, stop_reason):
         return
 
+    # Проверяем только текст ИИ — фиксированное вступление COOK_INTRO сюда не входит.
     dish_count, vague = check_cook_text(recipe_text)
-    if dish_count == expected_dishes and not vague:
-        logger.info(f"Повтора не было: блюд {dish_count} из {expected_dishes}, расплывчатых фраз нет")
+    late = check_cook_timing(recipe_text)
+    if dish_count == expected_dishes and not vague and not late:
+        logger.info(f"Повтора не было: блюд {dish_count} из {expected_dishes}, "
+                    "расплывчатых фраз и поздних стартов нет")
     else:
-        problems = describe_cook_problems(dish_count, expected_dishes, vague)
+        problems = describe_cook_problems(dish_count, expected_dishes, vague, late)
         logger.warning(f"Повторный запрос к ИИ, причины:\n{problems}")
         recipe_text, stop_reason = ask_cook_text(first_request + [
             {"role": "assistant", "content": recipe_text},
@@ -1860,6 +1890,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         if await cut_off(recipe_text, stop_reason):
             return
         dish_count, vague = check_cook_text(recipe_text)
+        late = check_cook_timing(recipe_text)
         if dish_count != expected_dishes:
             logger.error(f"После повтора блюд всё ещё {dish_count} из {expected_dishes} — повару ничего не отправлено")
             await warn_creator(
@@ -1869,7 +1900,9 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
             return
         if vague:
             logger.warning(f"После повтора остались расплывчатые фразы {vague} — отправляю как есть")
-        else:
+        if late:
+            logger.warning(f"После повтора остались поздние старты {late} — отправляю как есть")
+        if not vague and not late:
             logger.info(f"После повтора всё сошлось: блюд {dish_count} из {expected_dishes}")
 
     # ИИ ставит ---SPLIT--- между секциями и блюдами; режем только по ним,
