@@ -1524,7 +1524,11 @@ RULES FOR THE CONTENT
 17. ORDER: sections go early kids' breakfast, regular breakfast, breakfast for one person, dinner, dinner for one person. The dinner for one person comes AFTER the last shared dinner dish and BEFORE the dinner final check.
 18. SALTED WATER: whenever a step uses water for boiling, give the salt for it: "add 1 teaspoon of salt per litre of water".
 19. IN ADVANCE: never write "in advance", "beforehand" or "ahead of time" without minutes. Write "take the steaks out of the fridge 30 minutes before cooking".
-20. DURATION: the duration in a dish header = prep time + number of batches x time of one batch. Use these batch times: bacon 9 minutes, eggs 4 minutes, steaks 11 minutes, mushrooms 11 minutes. The dish starts in the countdown at its duration + 5 minutes ("⏱ 35 minutes" means "Start at T minus 40 min" or earlier).
+20. DURATION: the duration of a dish = prep time + its batches. Time of ONE batch: bacon 9 minutes (5 slices), eggs 4 minutes (5 eggs), steaks 11 minutes (3 steaks), mushrooms 11 minutes (270 g). The dish starts in the countdown at its duration + 5 minutes ("⏱ 35 minutes" means "Start at T minus 40 min" or earlier).
+21. TIME MATH: right under the ⏱ line of every dish write one line "Time math: " with only numbers, + and x, then "=" and the result, no words: prep + batches x batch time = total. Example for 2 batches of bacon and 3 batches of eggs: "Time math: 5 + 2 x 9 + 3 x 4 = 35". The result must equal the N in "⏱ N minutes". A dish cooked in several batches must show its batches in the time math. A dish without batches adds its prep and its cooking steps: "Time math: 10 + 5 + 45 + 15 = 75". Count only the steps of that one dish, one after another; do not plan around other dishes or shared pots. Bacon: count 1 slice = 30 g. Egg portions without a yolk request are medium yolk.
+22. SALT IN GRAMS: 1 teaspoon of fine salt = 6 g. If you give both teaspoons and grams, they must match (2 teaspoons = 12 g).
+23. PORTIONS ARE NOT EGGS: write "for the 2 portions with runny yolks (2 eggs per portion, 4 eggs in total)". Never write "the 2 eggs" when you mean portions.
+24. NO TOOL ALTERNATIVES: name one tool. Turn food with tongs: "use tongs", never "tongs or a fork". A fork appears only in a warning: "do not use a fork".
 
 FORMAT (follow exactly; replace the examples with today's real dishes)
 
@@ -1545,6 +1549,7 @@ Then every dish in this exact layout:
 
 🍄 FRIED MUSHROOMS — serves 9
 ⏱ 40 minutes (pan 1). Start at T minus 50 min.
+Time math: 7 + 3 x 11 = 40
 
 YOU NEED
 • Mushrooms: 810 g
@@ -1573,6 +1578,8 @@ After the last dish of each meal, a final check:
 • Serving spoons next to every dish
 
 Put the exact line ---SPLIT--- on its own line between sections: after the meal header with its countdown, between every two dishes, and before each final check. Never put ---SPLIT--- inside a dish.
+
+YOUR ANSWER IS ONLY THE MESSAGE. Start with the first ━ line. Write no notes, planning, calculations or explanations before, inside or after it; the only arithmetic you show is the Time math line of each dish.
 """
 
 TG_LIMIT = 3900  # Telegram allows 4096 characters per message, keep a margin
@@ -1629,10 +1636,67 @@ VAGUE_PHRASES = ["to taste", "a little", "a bit of", "as needed", "adjust", "as 
 COOK_TIME_LINE = re.compile(r"⏱\s*(\d+)\s*min.*?Start at T minus (\d+)\s*min", re.IGNORECASE)
 
 
+# Целым словом/выражением: «adjust» не должно ловить «adjusting texture: up to 60 ml».
+VAGUE_RES = [(p, re.compile(rf"\b{re.escape(p)}\b", re.IGNORECASE)) for p in VAGUE_PHRASES]
+# Служебная строка под ⏱: «Time math: 5 + 2 x 9 + 3 x 4 = 35». Повару не уходит.
+TIME_MATH_LINE = re.compile(r"^\s*Time math:\s*(.*)$", re.IGNORECASE)
+
+
 def check_cook_text(text):
     """Возвращает (число блюд в тексте, найденные расплывчатые фразы)."""
-    lowered = text.lower()
-    return len(COOK_DISH_LINE.findall(text)), [p for p in VAGUE_PHRASES if p in lowered]
+    return len(COOK_DISH_LINE.findall(text)), [p for p, rx in VAGUE_RES if rx.search(text)]
+
+
+def eval_time_math(expr):
+    """«5 + 2 x 9 + 3 x 4 = 35» -> (сумма, число после «=»); None, если
+    там что-то кроме цифр, +, x, ×, пробелов и одного «=»."""
+    if expr.count("=") != 1:
+        return None
+    left, right = expr.split("=")
+    if not re.fullmatch(r"[\d+x× ]+", left) or not re.fullmatch(r"\s*\d+\s*", right):
+        return None
+    total = 0
+    for term in left.split("+"):
+        factors = re.split(r"[x×]", term)
+        if not all(f.strip().isdigit() for f in factors):
+            return None
+        product = 1
+        for f in factors:
+            product *= int(f)
+        total += product
+    return total, int(right)
+
+
+def check_time_math(text):
+    """Блюда, у которых нет строки Time math или она не сходится сама с собой
+    либо с N из «⏱ N minutes». Возвращает строки проблем для повтора."""
+    dishes, cur = [], None
+    for line in text.splitlines():
+        if COOK_DISH_LINE.search(line):
+            cur = {"name": re.sub(r"^\W+", "", COOK_DISH_LINE.sub("", line)).strip(),
+                   "duration": None, "math": None}
+            dishes.append(cur)
+        elif cur is not None:
+            m = re.search(r"⏱\s*(\d+)\s*min", line)
+            if m and cur["duration"] is None:
+                cur["duration"] = int(m.group(1))
+            m = TIME_MATH_LINE.match(line)
+            if m and cur["math"] is None:
+                cur["math"] = m.group(1)
+    problems = []
+    for d in dishes:
+        if d["math"] is None:
+            problems.append(f"- Dish {d['name']}: there is no Time math line under the ⏱ line")
+            continue
+        result = eval_time_math(d["math"])
+        if result is None or result[0] != result[1] or result[1] != d["duration"]:
+            problems.append(f"- Dish {d['name']}: the time math does not add up")
+    return problems
+
+
+def strip_time_math(text):
+    """Вырезает служебные строки «Time math: ...» перед отправкой повару."""
+    return "\n".join(ln for ln in text.splitlines() if not TIME_MATH_LINE.match(ln))
 
 
 def check_cook_timing(text):
@@ -1652,9 +1716,9 @@ def check_cook_timing(text):
     return late
 
 
-def describe_cook_problems(dish_count, expected_dishes, vague, late=()):
+def describe_cook_problems(dish_count, expected_dishes, vague, late=(), bad_math=()):
     """Перечень проблем черновика по-английски — для повторного запроса к ИИ."""
-    problems = []
+    problems = list(bad_math)
     for dish, duration, start in late:
         problems.append(
             f"- Dish {dish}: it takes {duration} minutes but starts only {start} "
@@ -1819,7 +1883,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         "пересчитаны на указанное число порций, количества внутри шагов "
         "даны на одну порцию):\n"
         + plan_summary
-        + "\n"
+        + "\n\nNow write the message. Start with the first ━ line, no notes before it.\n"
     )
 
     def ask_cook_text(messages, attempt):
@@ -1836,6 +1900,11 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
                 text_parts.append(chunk)
             final_message = stream.get_final_message()
         text = "".join(text_parts)
+        # Без размышлений модель иногда пишет черновые расчёты перед сообщением —
+        # сообщение всегда начинается с линии ━, всё до неё отрезаем.
+        if "━" in text and not text.lstrip().startswith("━"):
+            logger.warning(f"Отрезал {text.index('━')} символов заметок перед сообщением повару")
+            text = text[text.index("━"):]
         logger.info(
             f"Compile-сообщение повару ({attempt}): stop_reason={final_message.stop_reason}, "
             f"output_tokens={final_message.usage.output_tokens}, "
@@ -1873,11 +1942,12 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     # Проверяем только текст ИИ — фиксированное вступление COOK_INTRO сюда не входит.
     dish_count, vague = check_cook_text(recipe_text)
     late = check_cook_timing(recipe_text)
-    if dish_count == expected_dishes and not vague and not late:
+    bad_math = check_time_math(recipe_text)
+    if dish_count == expected_dishes and not vague and not late and not bad_math:
         logger.info(f"Повтора не было: блюд {dish_count} из {expected_dishes}, "
-                    "расплывчатых фраз и поздних стартов нет")
+                    "расплывчатых фраз, поздних стартов и ошибок Time math нет")
     else:
-        problems = describe_cook_problems(dish_count, expected_dishes, vague, late)
+        problems = describe_cook_problems(dish_count, expected_dishes, vague, late, bad_math)
         logger.warning(f"Повторный запрос к ИИ, причины:\n{problems}")
         recipe_text, stop_reason = ask_cook_text(first_request + [
             {"role": "assistant", "content": recipe_text},
@@ -1891,6 +1961,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
             return
         dish_count, vague = check_cook_text(recipe_text)
         late = check_cook_timing(recipe_text)
+        bad_math = check_time_math(recipe_text)
         if dish_count != expected_dishes:
             logger.error(f"После повтора блюд всё ещё {dish_count} из {expected_dishes} — повару ничего не отправлено")
             await warn_creator(
@@ -1902,13 +1973,15 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"После повтора остались расплывчатые фразы {vague} — отправляю как есть")
         if late:
             logger.warning(f"После повтора остались поздние старты {late} — отправляю как есть")
-        if not vague and not late:
+        if bad_math:
+            logger.warning(f"После повтора Time math не сходится: {bad_math} — отправляю как есть")
+        if not vague and not late and not bad_math:
             logger.info(f"После повтора всё сошлось: блюд {dish_count} из {expected_dishes}")
 
     # ИИ ставит ---SPLIT--- между секциями и блюдами; режем только по ним,
     # чтобы блюдо не обрывалось на середине. Без разделителей split_big
     # порежет текст по пустым строкам.
-    body = sanitize_plain(recipe_text)
+    body = strip_time_math(sanitize_plain(recipe_text))
     pieces = [intro_text] + body.split("---SPLIT---")
     messages = pack_messages(pieces)
     logger.info(f"Сообщение повару: {len(messages)} частей, длины: {[len(m) for m in messages]}")
