@@ -1,4 +1,6 @@
 import os
+import re
+import asyncio
 import difflib
 import html
 import json
@@ -1456,6 +1458,196 @@ async def check_low_stock_and_alert(context: ContextTypes.DEFAULT_TYPE, inventor
         await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
 
 
+KITCHEN_FACTS = (
+    "2 large frying pans, 1 large pot (4 litres), an oven, a baking tray, "
+    "foil, paper towels, tongs, slotted spoon, spatula, grater, sharp "
+    "knife, cutting board, a kitchen thermometer, a timer"
+)
+
+# Weekday names don't depend on the server's locale this way.
+WEEKDAYS_EN = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+
+COOK_INTRO = """📋 TOMORROW'S MENU — {weekday}
+
+HOW TO USE THIS
+• Every dish has: what you need, numbered steps, and a ✅ line that tells you when it is ready.
+• Do ONE step at a time. Do not skip steps.
+• Times are minutes before serving. "T" = the moment the family sits down to eat.
+• Serving style is buffet: each dish goes on ONE big platter or bowl in the middle of the table. Only dishes marked "plated separately" go on their own plate.
+• Quantities already include a little extra for seconds.
+• Measures: 1 tablespoon = 15 ml, 1 teaspoon = 5 ml.
+
+🧰 YOU WILL NEED (check before you start)
+• 2 large frying pans (so you can cook two dishes at once)
+• 1 large pot (4 litres or bigger)
+• Baking tray, foil, paper towels, cling film
+• Tongs (not a fork), slotted spoon, spatula, grater, sharp knife, cutting board
+• Kitchen thermometer and a timer
+• Large platters and bowls, serving spoons
+
+🌡 HOW TO USE THE KITCHEN THERMOMETER (steaks, fish, chicken)
+1. Wipe the tip clean.
+2. Push the tip in sideways, into the middle of the thickest part.
+3. Do not touch the pan or a bone.
+4. Wait 5 seconds until the number stops changing.
+5. Read it, then wipe the tip clean.
+No thermometer? Press the steak with your finger: medium feels firm but springy, not soft like raw meat.
+
+🌡 TEMPERATURES TO REMEMBER
+• Beef steak: take it off the heat at 55°C. It rises to about 58°C (medium) while resting.
+• Fish (salmon, white fish): 60°C.
+• Chicken, pork and any mince: 74°C."""
+
+COOK_FORMAT_PROMPT = """You are writing tomorrow's cooking instructions for a home cook. The cook reads English, follows instructions literally, and has little cooking experience. Write everything in clear simple English. Translate every dish name, ingredient and step into English. Leave no Russian words.
+
+THE OUTPUT IS PLAIN TEXT FOR TELEGRAM. Do NOT use markdown: no #, no **, no tables, no backticks. Use emoji and the ━ lines for structure, exactly as in the FORMAT below.
+
+KITCHEN FACTS (assume these): {kitchen_facts}. Buffet style: each dish goes on one big shared platter or bowl. Quantities already include a small extra for seconds.
+
+RULES FOR THE CONTENT
+1. Keep every ingredient, quantity, time and temperature from the dish data. Never invent ingredients. You MAY: split a step with several actions into several steps so that every step is ONE action; add short cues (what it looks like, sounds like or smells like); add warnings; add prep steps; convert spoons. Quantities inside the recipe steps in the data are for ONE portion: rewrite them for the number of portions of that dish.
+2. Be exact. Always give amounts (grams, ml, teaspoons, minutes, heat level out of 10). Never write "to taste", "a bit", "some", "a pinch" without a number. Salt and pepper always get an amount.
+3. Name products exactly. "Hard cheese" is the yellow cheddar block, never parmesan. Write "hard cheese (yellow cheddar block, NOT parmesan)" the first time in each dish. Write "parmesan" only when the data says parmesan.
+4. Meat and fish are judged with the thermometer, with a finger or visual check as backup: beef steak 55°C off the heat (rises to about 58°C, medium) unless the data asks for another doneness; fish 60°C; chicken, pork and any mince 74°C. If voters asked for a doneness, give the matching temperature (rare 50°C, medium-rare 52°C, medium 55°C, medium-well 60°C, well done 65°C, all off the heat).
+5. If the portions do not fit in one pan, split into batches (for example 3 steaks, 5 eggs, 5 bacon slices, 270 g of mushrooms per batch) and write the batch plan: "Repeat steps X to Y for the next batch".
+6. Eggs and anything that must be hot are cooked LAST. Cold dishes and long-simmering dishes are made FIRST. Prep such as slicing cheese or grating goes under GET READY, before the stove is on.
+7. Never write that the instructions are simplified or that the cook is inexperienced. Just give clear complete steps.
+8. If the family notes mention an allergy or a wish, add a ⚠️ line inside the dish it affects and say exactly how to change the dish.
+9. If there is a section for an early kids' breakfast, put it FIRST. If a dish is for one person only (plated separately, no meat), put it in its own section and add which shared dishes that person can also eat and that they do NOT eat the meat dishes.
+10. Keep each dish under about 3000 characters.
+11. Never name people and never state anyone's gender (no he, she, his, her). The data may contain names: do not repeat them. For a dish for one person, write "the person who is fasting" (or "the person who ..." matching the reason). For a doneness wish, write how many portions need it, not whose they are.
+12. COMPLETENESS: every dish in the data appears exactly once in its own section. If the same dish is in the early kids' breakfast and in the regular breakfast, write it out in full in BOTH sections. Before answering, count the dishes in the data and in your answer.
+13. SALT: 1 teaspoon of fine salt = 6 g; convert grams with this. A steak gets at most 1/2 teaspoon of salt per steak. Give salt per steak (or per portion) and make sure the total in YOU NEED matches: an amount "per batch" times the number of batches. For soup give a start and a maximum: "Add 1 teaspoon, stir for 1 minute, taste. If still flat, add 1/2 teaspoon at a time, no more than 2 teaspoons in total."
+14. NO VAGUE AMOUNTS: never write "a little", "a bit", "to taste", "as needed", "adjust". Oil always has an amount ("1 tablespoon (15 ml) of oil").
+15. DONENESS: count the doneness requests per level; portions without a request are medium. Write one line such as "Steaks: 2 x medium-rare (52°C), 6 x medium (55°C), 1 x well done (65°C)" and group the batches by doneness ("Batch 1: 3 steaks, medium, take off at 55°C"). Describe batches in pieces, not grams. Never say who asked for what.
+16. TIMES: the duration in a dish header matches its steps; "Start at T minus X" is at least the duration plus 5 minutes; the times in the countdown match the dish headers.
+17. ORDER: sections go early kids' breakfast, regular breakfast, breakfast for one person, dinner, dinner for one person. The dinner for one person comes AFTER the last shared dinner dish and BEFORE the dinner final check.
+
+FORMAT (follow exactly; replace the examples with today's real dishes)
+
+Write one section header for each meal in the data, in the order from rule 17. Section headers say "(N people)" and never "serves"; only dish headers end with "— serves N":
+
+━━━━━━━━━━━━━━━━━━━━
+☀️ REGULAR BREAKFAST (7 people)
+━━━━━━━━━━━━━━━━━━━━
+
+Right under a regular meal header, write a COUNTDOWN with only today's dishes. T = the meal is served. Use minutes before T, say which pan each dish uses, put long and cold dishes first and eggs and steaks last, and make the times realistic:
+⏰ COUNTDOWN (T = breakfast is served)
+T minus 70 min: Fruit salad and cucumber salad, then into the fridge
+T minus 55 min: Steaks with ham and cheese (pan 1)
+T minus 12 min: Eggs LAST (pan 2), so they do not go cold
+T minus 0: Everything on the table
+
+Then every dish in this exact layout:
+
+🍄 FRIED MUSHROOMS — serves 9
+⏱ 40 minutes (pan 1). Start at T minus 50 min.
+
+YOU NEED
+• Mushrooms: 810 g
+• Butter: 90 g
+• Salt: 1 teaspoon
+• Black pepper: 1/2 teaspoon
+
+GET READY
+1. Slice the mushrooms about 5 mm thick.
+2. Divide them into 3 equal piles (about 270 g each).
+
+COOK (3 batches)
+3. Heat the large pan on medium-high heat for 2 minutes. Do not add oil.
+4. Add 30 g of butter and let it melt.
+5. Add the first pile in one layer. Do not crowd the pan.
+6. Leave it for 3 minutes without stirring.
+7. Stir. Cook 6 to 8 more minutes, stirring every minute.
+✅ READY WHEN: all the water has gone from the pan and the mushrooms are golden brown.
+8. Move the mushrooms to a warm bowl and cover with foil.
+9. Repeat steps 4 to 8 with the 2nd and 3rd piles.
+⚠️ Salt at the END only. Early salt makes mushrooms watery.
+
+After the last dish of each meal, a final check:
+✅ DINNER FINAL CHECK (before you call the family)
+• one bullet per dish: where it goes and whether it is hot or cold
+• Serving spoons next to every dish
+
+Put the exact line ---SPLIT--- on its own line between sections: after the meal header with its countdown, between every two dishes, and before each final check. Never put ---SPLIT--- inside a dish.
+"""
+
+TG_LIMIT = 3900  # Telegram allows 4096 characters per message, keep a margin
+
+
+def sanitize_plain(text):
+    """На случай, если ИИ всё же написал markdown — сообщение уходит без parse_mode."""
+    lines = []
+    for ln in text.splitlines():
+        ln = ln.lstrip("#").lstrip() if ln.startswith("#") else ln
+        lines.append(ln.replace("**", "").replace("__", "").replace("`", ""))
+    return "\n".join(lines)
+
+
+def split_big(block, limit=TG_LIMIT):
+    """Режет слишком длинный кусок по пустым строкам (абзацам), не посреди фразы."""
+    parts, units, cur = block.split("\n\n"), [], ""
+    for p in parts:
+        if cur and len(cur) + 2 + len(p) > limit:
+            units.append(cur)
+            cur = p
+        else:
+            cur = (cur + "\n\n" + p) if cur else p
+    if cur:
+        units.append(cur)
+    return units
+
+
+def pack_messages(pieces, limit=TG_LIMIT):
+    """Складывает целые куски (вступление, секции, блюда) в сообщения до limit
+    символов, не разрезая кусок между сообщениями, если он сам влезает."""
+    units = []
+    for p in pieces:
+        p = p.strip()
+        if not p:
+            continue
+        units.extend([p] if len(p) <= limit else split_big(p, limit))
+    msgs, cur = [], ""
+    for u in units:
+        if cur and len(cur) + 2 + len(u) > limit:
+            msgs.append(cur)
+            cur = u
+        else:
+            cur = (cur + "\n\n" + u) if cur else u
+    if cur:
+        msgs.append(cur)
+    return msgs
+
+
+# Dish headers in the cook message end with "— serves N"; section headers say "(N people)".
+COOK_DISH_LINE = re.compile(r"[—–-]\s*serves \d+\s*$", re.MULTILINE)
+VAGUE_PHRASES = ["to taste", "a little", "a bit of", "as needed", "adjust", "as much as"]
+
+
+def check_cook_text(text):
+    """Возвращает (число блюд в тексте, найденные расплывчатые фразы)."""
+    lowered = text.lower()
+    return len(COOK_DISH_LINE.findall(text)), [p for p in VAGUE_PHRASES if p in lowered]
+
+
+def describe_cook_problems(dish_count, expected_dishes, vague):
+    """Перечень проблем черновика по-английски — для повторного запроса к ИИ."""
+    problems = []
+    if dish_count != expected_dishes:
+        problems.append(
+            f"- The message has {dish_count} dishes (lines ending with \"— serves N\"), "
+            f"but the data has {expected_dishes}. Every dish must appear exactly once in "
+            "its section; a dish that is both in the early kids' breakfast and in the "
+            "regular breakfast is written out in full in both."
+        )
+    if vague:
+        problems.append(
+            "- Vague phrases found: " + ", ".join(f"\"{p}\"" for p in vague)
+            + ". Replace each one with an exact amount or a clear rule."
+        )
+    return "\n".join(problems)
+
+
 async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     if not COOK_CHAT_ID:
         logger.warning("COOK_CHAT_ID не задан — некому отправлять план")
@@ -1591,81 +1783,108 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
                 weekly[name] = {"amount": item["amount"], "unit": item["unit"]}
         save_json(WEEKLY_SHORTFALL_FILE, weekly)
 
+    weekday = WEEKDAYS_EN[(datetime.now(TIMEZONE) + timedelta(days=1)).weekday()]
+    intro_text = COOK_INTRO.format(weekday=weekday)
+
     prompt = (
-        "Write your entire response in clear, simple English — the cook reading "
-        "this speaks English, not Russian. Translate every dish name, ingredient "
-        "name, and instruction into English; do not leave any Russian words in "
-        "your output.\n\n"
-        "The cook is not very experienced, so translate the recipe steps in full "
-        "detail — every single step, with exact times, temperatures, and doneness "
-        "cues. Do not summarize, shorten, or merge steps together. If a step "
-        "mentions a specific technique, keep the explanation of how to do it.\n\n"
-        "Ты помогаешь повару приготовить еду для семьи на 7 человек по итогам "
-        "голосования — только победившие блюда, а не всё, что кто-то предлагал. "
-        "Все блюда без глютена — уже учтено в рецептах ниже, не меняй "
-        "ингредиенты и их количество (уже пересчитаны на нужное число "
-        "порций).\n\n"
-        "А вот количества внутри шагов приготовления (граммы, мл воды, "
-        "ложки соли и специй, штуки) написаны на ОДНУ порцию — пересчитай "
-        "их на число порций, указанное у блюда («на N порций»), и пиши в "
-        "шагах уже итоговое количество. Время и температуру не "
-        "пересчитывай.\n\n"
-        "Повар не очень опытный — сохраняй ВСЕ шаги приготовления дословно и "
-        "по порядку, ничего не сокращай и не объединяй в более общие фразы. "
-        "Рецепты специально написаны подробно (точное время, температура, "
-        "признаки готовности) — это важно сохранить, а не пересказать короче. "
-        "Твоя задача — только красиво оформить и сгруппировать, не редактируя "
-        "содержание рецептов.\n\n"
-        "Представь, что объясняешь это дословно человеку, который вообще никогда "
-        "не готовил — как ребёнку, который первый раз стоит у плиты. Не пропускай "
-        "ни одной мелочи: сколько именно чего добавить, когда именно помешать, "
-        "как понять, что готово. Если в рецепте написано добавить какую-то "
-        "специю, зелень или приправу — обязательно укажи именно её, а не общее "
-        "«добавьте специи по вкусу». Ни в коем случае не пиши в самом сообщении "
-        "ничего о том, что инструкция упрощена или что повар неопытный — просто "
-        "дай чёткие, полные шаги, как есть, без всяких пояснений об уровне "
-        "сложности.\n\n"
-        "Это шведский стол: каждое блюдо готовится одной большой порцией и "
-        "подаётся на общей посуде (одна большая тарелка/миска/поднос), а не "
-        "раскладывается по отдельным персональным тарелкам — люди накладывают "
-        "себе сами. Учти это в формулировке подачи. Если ингредиенты "
-        "пересчитаны на много порций (например, больше 6) и блюдо жарится на "
-        "сковороде (яичница, омлет, скрэмбл, оладьи) — напиши повару "
-        "предупреждение, что может понадобиться сковорода побольше или "
-        "готовка в несколько заходов, потому что всё сразу может не "
-        "поместиться.\n\n"
-        f"Вот меню на завтра по итогам голосования:\n{plan_summary}\n\n"
-        "Отформатируй это в чистое сообщение для повара: раздел «Завтрак» с "
-        "подразделами Основное/Десерт, раздел «Ужин» с подразделами "
-        "Стартер/Основное/Гарнир/Десерт (пропускай подраздел, если в него "
-        "никто не голосовал). Рядом с именами в скобках указана прожарка "
-        "яйца/мяса — обязательно вынеси её отдельной пометкой внутри блюда, "
-        "чтобы повар знал, что часть порций нужно снять с огня раньше или "
-        "позже. Если в «Комментариях по людям» есть аллергия или пожелание — "
-        "явно укажи в подходящем блюде, что одну порцию нужно отделить и "
-        "видоизменить, и как именно."
+        COOK_FORMAT_PROMPT.format(kitchen_facts=KITCHEN_FACTS)
+        + "\nВот меню на завтра по итогам голосования (ингредиенты уже "
+        "пересчитаны на указанное число порций, количества внутри шагов "
+        "даны на одну порцию):\n"
+        + plan_summary
+        + "\n"
     )
 
-    text_parts = []
-    with client.messages.stream(
-        model="claude-sonnet-5",
-        max_tokens=20000,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        for chunk in stream.text_stream:
-            text_parts.append(chunk)
-        final_message = stream.get_final_message()
-    recipe_text = "".join(text_parts)
-    logger.info(
-        f"Compile-сообщение повару: stop_reason={final_message.stop_reason}, "
-        f"длина={len(recipe_text)} символов"
-    )
-    chunks = [recipe_text[i : i + 3500] for i in range(0, len(recipe_text), 3500)]
-    for chunk in chunks:
+    def ask_cook_text(messages, attempt):
+        # Размышления выключены: с ними модель тратила на планирование ~33k
+        # токенов из лимита и обрывала текст повару на середине.
+        text_parts = []
+        with client.messages.stream(
+            model="claude-sonnet-5",
+            max_tokens=16000,
+            thinking={"type": "disabled"},
+            messages=messages,
+        ) as stream:
+            for chunk in stream.text_stream:
+                text_parts.append(chunk)
+            final_message = stream.get_final_message()
+        text = "".join(text_parts)
+        logger.info(
+            f"Compile-сообщение повару ({attempt}): stop_reason={final_message.stop_reason}, "
+            f"output_tokens={final_message.usage.output_tokens}, "
+            f"длина={len(text)} символов"
+        )
+        return text, final_message.stop_reason
+
+    async def warn_creator(text):
         try:
-            await context.bot.send_message(chat_id=COOK_CHAT_ID, text=chunk)
+            await context.bot.send_message(chat_id=CREATOR_CHAT_ID, text=text)
+        except Exception as e:
+            logger.error(f"Не удалось предупредить создателя: {e}")
+
+    async def cut_off(text, stop_reason):
+        """Оборванный или пустой текст повару не шлём — создатель перезапустит сборку."""
+        if stop_reason == "end_turn" and text.strip():
+            return False
+        reason = stop_reason if stop_reason != "end_turn" else "пустой ответ"
+        logger.error(f"Сообщение повару оборвалось ({reason}) — повару ничего не отправлено")
+        await warn_creator(
+            f"Сообщение повару оборвалось ({reason}), повару ничего не "
+            "отправлено. Запустите /forcecompile"
+        )
+        return True
+
+    # Столько блюд, сколько в plan_summary: завтрак + ужин (блюда на одного
+    # уже среди них) + отдельный блок школьников.
+    expected_dishes = len(menu["breakfast"]) + len(menu["dinner"]) + (1 if kids_section else 0)
+
+    first_request = [{"role": "user", "content": prompt}]
+    recipe_text, stop_reason = ask_cook_text(first_request, "черновик")
+    if await cut_off(recipe_text, stop_reason):
+        return
+
+    dish_count, vague = check_cook_text(recipe_text)
+    if dish_count == expected_dishes and not vague:
+        logger.info(f"Повтора не было: блюд {dish_count} из {expected_dishes}, расплывчатых фраз нет")
+    else:
+        problems = describe_cook_problems(dish_count, expected_dishes, vague)
+        logger.warning(f"Повторный запрос к ИИ, причины:\n{problems}")
+        recipe_text, stop_reason = ask_cook_text(first_request + [
+            {"role": "assistant", "content": recipe_text},
+            {"role": "user", "content": (
+                f"Your draft has these problems:\n{problems}\n\n"
+                "Write the COMPLETE message again with every problem fixed. "
+                "Same format, same ---SPLIT--- rules."
+            )},
+        ], "повтор")
+        if await cut_off(recipe_text, stop_reason):
+            return
+        dish_count, vague = check_cook_text(recipe_text)
+        if dish_count != expected_dishes:
+            logger.error(f"После повтора блюд всё ещё {dish_count} из {expected_dishes} — повару ничего не отправлено")
+            await warn_creator(
+                f"В сообщении повару не хватает блюд (в ответе {dish_count} из "
+                f"{expected_dishes}). Повару ничего не отправлено. Запустите /forcecompile"
+            )
+            return
+        if vague:
+            logger.warning(f"После повтора остались расплывчатые фразы {vague} — отправляю как есть")
+        else:
+            logger.info(f"После повтора всё сошлось: блюд {dish_count} из {expected_dishes}")
+
+    # ИИ ставит ---SPLIT--- между секциями и блюдами; режем только по ним,
+    # чтобы блюдо не обрывалось на середине. Без разделителей split_big
+    # порежет текст по пустым строкам.
+    body = sanitize_plain(recipe_text)
+    pieces = [intro_text] + body.split("---SPLIT---")
+    messages = pack_messages(pieces)
+    logger.info(f"Сообщение повару: {len(messages)} частей, длины: {[len(m) for m in messages]}")
+    for m in messages:
+        try:
+            await context.bot.send_message(chat_id=COOK_CHAT_ID, text=m)
         except Exception as e:
             logger.error(f"Не удалось отправить часть сообщения повару: {e}")
+        await asyncio.sleep(0.5)
 
 
 async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
