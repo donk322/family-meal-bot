@@ -28,7 +28,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from anthropic import Anthropic
+from anthropic import Anthropic, APIError
 
 load_dotenv()
 
@@ -265,9 +265,10 @@ def check_generated_ingredients(generated, inventory):
     Латинские буквы внутри русских слов сначала заменяются на русские,
     почти совпавшее название (опечатка) заменяется на название из запасов;
     блюдо с ингредиентом, которого нет ни в запасах, ни среди бытовых,
-    выбрасывается. Несовпадение единицы с запасами только пишется в лог."""
+    выбрасывается. Несовпадение единицы с запасами только пишется в лог.
+    Возвращает (оставшиеся блюда, {id выброшенного блюда: ненайденные названия})."""
     known = list(inventory) + sorted(PANTRY_STAPLES | {"вода"})
-    checked = {}
+    checked, dropped = {}, {}
     for dish_id, dish in generated.items():
         unknown = []
         for ing in dish.get("ingredients", []):
@@ -290,9 +291,28 @@ def check_generated_ingredients(generated, inventory):
                 )
         if unknown:
             logger.warning(f"Выбрасываю {dish_id} ({dish.get('name')}): нет в запасах {unknown}")
+            dropped[dish_id] = unknown
             continue
         checked[dish_id] = dish
-    return checked
+    return checked, dropped
+
+
+# Почти пустые позиции не показываем модели при генерации меню: на 0.19 г
+# ягод или 6 г огурца она строит блюда, которые не из чего приготовить.
+# Соль, перец, масло и сухие специи в промпте и так «всегда есть».
+# Английские единицы — у продуктов, которые /addstock добавил не из INGREDIENT_EN.
+MENU_MIN_STOCK = {
+    "г": 20, "мл": 20, "кг": 0.02, "л": 0.02, "шт": 0.5,
+    "g": 20, "ml": 20, "kg": 0.02, "l": 0.02, "pcs": 0.5, "pc": 0.5,
+}
+
+
+def usable_stock(inventory):
+    return {
+        name: info for name, info in inventory.items()
+        if info.get("amount", 0) > 0
+        and info.get("amount", 0) >= MENU_MIN_STOCK.get(info.get("unit"), 0)
+    }
 
 
 # Hand-written dishes from the static catalog, shown to Claude as the target
@@ -329,13 +349,19 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
     меню на завтра ИЗ ТОГО, ЧТО РЕАЛЬНО ЕСТЬ в запасах, и подменяет
     глобальный DISHES этими блюдами — весь остальной код (расчёт
     порций, вычитание из запасов, сборка сообщения повару) работает
-    с этим точно так же, как раньше работал со статичным каталогом."""
+    с этим точно так же, как раньше работал со статичным каталогом.
+    Возвращает None, если меню готово, иначе причину сбоя для создателя."""
     global DISHES, INGREDIENT_TYPICAL_USAGE
 
-    inventory = load_inventory()
+    all_stock = load_inventory()
+    inventory = usable_stock(all_stock)
+    skipped = [f"{name} {info.get('amount')} {info.get('unit')}"
+               for name, info in all_stock.items() if name not in inventory]
+    if skipped:
+        logger.info(f"Почти пустые позиции не передаю в генерацию меню: {', '.join(skipped)}")
     if not inventory:
         logger.warning("Запасы пусты — пропускаю генерацию меню, оставляю прошлый DISHES")
-        return
+        return "пустые запасы"
 
     inventory_lines = "\n".join(
         f"{name}: {info['amount']} {info['unit']}" for name, info in inventory.items()
@@ -498,25 +524,34 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
         "название категории и номер по порядку)."
     )
 
-    # 32 detailed dishes with full ingredients/steps needs far more than 8000
-    # output tokens (verified manually: truncates well past 20000 without
-    # streaming), and the SDK refuses max_tokens this large without
-    # streaming since the request could run past its 10-minute non-streaming
-    # cap — so this call streams and waits for the full response.
+    # Размышления выключены: они съедали лимит токенов, и JSON с меню
+    # обрывался. Streaming оставлен — без него SDK не даёт ставить такой
+    # max_tokens.
     text_parts = []
-    with client.messages.stream(
-        model="claude-sonnet-5",
-        max_tokens=36000,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        for chunk in stream.text_stream:
-            text_parts.append(chunk)
-        final_message = stream.get_final_message()
+    try:
+        with client.messages.stream(
+            model="claude-sonnet-5",
+            max_tokens=16000,
+            thinking={"type": "disabled"},
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                text_parts.append(chunk)
+            final_message = stream.get_final_message()
+    except APIError as e:
+        logger.error(f"Генерация меню: ошибка API: {e}. Оставляю прошлый DISHES.")
+        return f"ошибка API: {e}"
     logger.info(
         f"Генерация меню: stop_reason={final_message.stop_reason}, "
         f"output_tokens={final_message.usage.output_tokens}"
     )
     text = "".join(text_parts).strip()
+    if final_message.stop_reason != "end_turn":
+        logger.error(
+            f"Ответ с меню оборвался ({final_message.stop_reason}), "
+            f"начало ответа: {text[:300]!r}. Оставляю прошлый DISHES."
+        )
+        return f"обрыв ({final_message.stop_reason})"
 
     # На случай, если ответ обёрнут в ```json ... ```
     if text.startswith("```"):
@@ -527,14 +562,25 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         generated = json.loads(text)
-    except json.JSONDecodeError as e:
-        logger.error(f"Не удалось распарсить сгенерированное меню: {e}. Оставляю прошлый DISHES.")
-        return
+        if not isinstance(generated, dict):
+            raise ValueError(f"в ответе {type(generated).__name__}, а не словарь блюд")
+    except ValueError as e:  # JSONDecodeError тоже ValueError
+        logger.error(
+            f"Не удалось распарсить сгенерированное меню: {e}. "
+            f"Первые 300 символов ответа: {text[:300]!r}. Оставляю прошлый DISHES."
+        )
+        return "ошибка разбора JSON"
 
-    generated = check_generated_ingredients(generated, inventory)
+    total = len(generated)
+    generated, dropped = check_generated_ingredients(generated, inventory)
+    missing = Counter(name for names in dropped.values() for name in set(names))
+    logger.info(
+        f"Сверка с запасами: выброшено {len(dropped)} из {total} блюд"
+        + (": " + ", ".join(f"«{name}» — {n}" for name, n in missing.most_common()) if missing else "")
+    )
     if not generated:
         logger.error("После сверки с запасами не осталось ни одного блюда. Оставляю прошлый DISHES.")
-        return
+        return f"сверка выбросила все блюда: не нашлись {', '.join(missing) or 'ингредиенты'}"
 
     global DISHES_GENERATED_DATE
     DISHES_GENERATED_DATE = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
@@ -543,6 +589,21 @@ async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
     save_json(TODAY_MENU_CACHE_FILE, DISHES)
     INGREDIENT_TYPICAL_USAGE = build_ingredient_typical_usage()
     logger.info(f"Сгенерировано меню на сегодня: {len(DISHES)} блюд")
+    return None
+
+
+async def scheduled_menu_generation(context: ContextTypes.DEFAULT_TYPE):
+    """Плановая генерация (и догоняющая при старте): о сбое пишем создателю,
+    иначе его видно только по «Меню ещё не готово» в мини-аппе."""
+    reason = await generate_daily_menu_options(context)
+    if reason:
+        try:
+            await context.bot.send_message(
+                chat_id=CREATOR_CHAT_ID,
+                text=f"Не получилось сгенерировать меню: {reason}. Запустите /regenmenu",
+            )
+        except Exception as e:
+            logger.error(f"Не удалось предупредить создателя: {e}")
 
 
 # ---------- storage helpers ----------
@@ -674,15 +735,17 @@ async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("Генерирую меню на сегодня, это займёт пару минут…")
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    await generate_daily_menu_options(context)
-    if DISHES_GENERATED_DATE == today:
+    reason = await generate_daily_menu_options(context)
+    if not reason:
         await update.message.reply_text(f"Готово: {len(DISHES)} блюд, можно голосовать.")
-    else:
-        await update.message.reply_text(
-            "Не получилось сгенерировать меню (пустые запасы или ошибка "
-            "разбора ответа) — подробности в логах Render."
-        )
+        return
+    text = f"Не получилось сгенерировать меню: {reason}. Подробности в логах Render."
+    await update.message.reply_text(text)
+    if update.effective_user.id != CREATOR_CHAT_ID:
+        try:
+            await context.bot.send_message(chat_id=CREATOR_CHAT_ID, text=text)
+        except Exception as e:
+            logger.error(f"Не удалось предупредить создателя: {e}")
 
 
 async def forcecompile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1762,7 +1825,7 @@ def main():
 
     job_queue = app.job_queue
     job_queue.run_daily(
-        generate_daily_menu_options,
+        scheduled_menu_generation,
         time=dtime(hour=GENERATE_HOUR, minute=GENERATE_MINUTE, tzinfo=TIMEZONE),
     )
     # Деплой/рестарт после времени генерации сбрасывает сегодняшнее меню —
@@ -1772,7 +1835,7 @@ def main():
     generate_time_today = now.replace(hour=GENERATE_HOUR, minute=GENERATE_MINUTE, second=0, microsecond=0)
     if DISHES_GENERATED_DATE != now.strftime("%Y-%m-%d") and now >= generate_time_today:
         logger.info("Меню на сегодня ещё не сгенерировано — запускаю генерацию при старте")
-        job_queue.run_once(generate_daily_menu_options, when=0)
+        job_queue.run_once(scheduled_menu_generation, when=0)
     job_queue.run_daily(
         send_evening_reminders, time=dtime(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, tzinfo=TIMEZONE)
     )
