@@ -88,7 +88,6 @@ DATA_DIR.mkdir(exist_ok=True)
 
 FAMILY_FILE = DATA_DIR / "family.json"
 INVENTORY_FILE = DATA_DIR / "inventory.json"
-LAST_SHOPPING_LIST_FILE = DATA_DIR / "last_shopping_list.json"
 WEEKLY_SHORTFALL_FILE = DATA_DIR / "weekly_shortfall.json"
 FOOD_PREFERENCES_FILE = DATA_DIR / "food_preferences.json"
 SERVED_BY_DATE_FILE = DATA_DIR / "served_by_date.json"  # {"YYYY-MM-DD": [{"name", "meal"}, ...]}
@@ -766,22 +765,9 @@ async def updatestock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def restock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    shopping_list = load_json(LAST_SHOPPING_LIST_FILE, {})
-    if not shopping_list:
-        await update.message.reply_text("Последний список покупок пуст или его ещё не было.")
-        return
-
-    inventory = load_inventory()
-    for name, item in shopping_list.items():
-        if name in inventory:
-            inventory[name]["amount"] += item["amount"]
-            inventory[name]["unit"] = item["unit"]
-        else:
-            inventory[name] = {"amount": item["amount"], "unit": item["unit"]}
-    save_inventory(inventory)
-    save_json(LAST_SHOPPING_LIST_FILE, {})
-
-    await update.message.reply_text("Готово, запасы пополнены по последнему списку покупок.")
+    """Retired: stock is topped up with the /addstock lines from the shopping
+    list, so the same purchase is never counted twice. Nothing is changed."""
+    await update.message.reply_text("Используйте строки /addstock из списка покупок (/whatstobuy)")
 
 
 def fmt_amount(x):
@@ -856,7 +842,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/whatstobuy — shopping list: what to buy, how much, and for which "
         "dishes, grouped by store section. It ends with ready /addstock "
         "lines to send after shopping. The same list also arrives "
-        "automatically once a week\n"
+        f"automatically every {WEEKDAYS_EN[WEEKLY_SHOPPING_DAY % 7].capitalize()} at "
+        f"{WEEKLY_SHOPPING_HOUR:02d}:{WEEKLY_SHOPPING_MINUTE:02d}\n"
         "/shoppinglist — what ran short in this week's cooking so far\n"
         "/rate — rate today's dishes (👍/👎 for taste, and whether the "
         "portion size was right) — this shows which dishes the family "
@@ -1618,25 +1605,26 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
+    """Weekly list (Sunday 21:35 by default) — the same as /whatstobuy
+    (catalog/shopping_list.py), built by code from the current stock, no AI.
+    Goes to the cook, with copies to the creator and the family head."""
+    recipients = [c for c in dict.fromkeys((COOK_CHAT_ID, CREATOR_CHAT_ID, FAMILY_HEAD_CHAT_ID)) if c]
     if not COOK_CHAT_ID:
-        logger.warning("COOK_CHAT_ID не задан — некому отправлять список покупок")
-        return
+        logger.warning("COOK_CHAT_ID не задан — список покупок уходит только копиями создателю и главе семьи")
 
-    # Same list as /whatstobuy (catalog/shopping_list.py), built by code from
-    # the current stock — no AI.
     stock, _ = inventory_as_english_stock()
     messages = build_shopping_messages(stock, CATALOG)
-    for msg in messages:
-        try:
-            await context.bot.send_message(chat_id=COOK_CHAT_ID, text=msg)
-        except Exception as e:
-            logger.error(f"Не удалось отправить часть списка покупок повару: {e}")
-        await asyncio.sleep(0.5)
-    logger.info(f"Недельный список покупок: {len(messages)} сообщ., длины {[len(m) for m in messages]}")
+    for chat_id in recipients:
+        for msg in messages:
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=msg)
+            except Exception as e:
+                logger.error(f"Не удалось отправить часть списка покупок в {chat_id}: {e}")
+            await asyncio.sleep(0.5)
+    logger.info(f"Недельный список покупок: {len(messages)} сообщ., длины {[len(m) for m in messages]}, "
+                f"получатели {recipients}")
 
-    # /restock adds back whatever was in the last weekly shortfall — kept as before
-    weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
-    save_json(LAST_SHOPPING_LIST_FILE, weekly)
+    # /shoppinglist shows what ran short during the week; a new week starts now.
     save_json(WEEKLY_SHORTFALL_FILE, {})
 
 
