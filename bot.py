@@ -28,6 +28,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.error import BadRequest
 from anthropic import Anthropic
 
 from catalog.scale_recipe import load_catalog, render_dish, countdown_lines, scaled_ingredients
@@ -71,6 +72,12 @@ LOW_STOCK_SERVINGS = float(os.environ.get("LOW_STOCK_SERVINGS", "8"))
 # buffer for seconds.
 PORTION_BUFFER_EXTRA = int(os.environ.get("PORTION_BUFFER_EXTRA", "2"))
 
+# How many people usually eat (breakfast without the two kids, who eat earlier).
+# Portions = max(this or the /people override, voters of that meal) + PORTION_BUFFER_EXTRA.
+BREAKFAST_PEOPLE = int(os.environ.get("BREAKFAST_PEOPLE", "5"))
+DINNER_PEOPLE = int(os.environ.get("DINNER_PEOPLE", "7"))
+HEADCOUNT_MIN, HEADCOUNT_MAX = 1, 30
+
 # /whatstobuy reports shortfall for a full family-size batch, not one serving.
 WHATSTOBUY_SERVINGS = int(os.environ.get("WHATSTOBUY_SERVINGS", "8"))
 
@@ -92,6 +99,7 @@ SERVED_BY_DATE_FILE = DATA_DIR / "served_by_date.json"  # {"YYYY-MM-DD": [{"name
 SERVED_KEEP_DAYS = 7
 RECENT_DISHES_FILE = DATA_DIR / "recent_dishes.json"
 RATED_TODAY_FILE = DATA_DIR / "rated_today.json"  # {"date": "YYYY-MM-DD", "users": ["123", ...]}
+HEADCOUNT_FILE = DATA_DIR / "headcount.json"  # {"breakfast": null|int, "dinner": null|int}, null = как обычно
 RECENT_DISHES_DAYS = int(os.environ.get("RECENT_DISHES_DAYS", "5"))
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -289,6 +297,69 @@ def save_inventory(inventory):
     save_json(INVENTORY_FILE, inventory)
 
 
+DEFAULT_PEOPLE = {"breakfast": BREAKFAST_PEOPLE, "dinner": DINNER_PEOPLE}
+HEADCOUNT_EMPTY = {"breakfast": None, "dinner": None, "days": 0}
+
+
+def load_headcount():
+    """/people state: {"breakfast": int|None, "dinner": int|None, "days": int}.
+    None = as usual. days = how many more compiles the override applies to."""
+    data = load_json(HEADCOUNT_FILE, {})
+    hc = dict(HEADCOUNT_EMPTY)
+    for meal in ("breakfast", "dinner"):
+        v = data.get(meal)
+        if isinstance(v, int) and not isinstance(v, bool) and HEADCOUNT_MIN <= v <= HEADCOUNT_MAX:
+            hc[meal] = v
+    if hc["breakfast"] is not None or hc["dinner"] is not None:
+        days = data.get("days")
+        hc["days"] = days if isinstance(days, int) and not isinstance(days, bool) and days > 0 else 1
+    return hc
+
+
+def save_headcount(hc):
+    save_json(HEADCOUNT_FILE, hc)
+
+
+def headcount_active(hc):
+    return hc["breakfast"] is not None or hc["dinner"] is not None
+
+
+def planned_people(meal, hc):
+    """(people planned for the meal, whether it is a /people override)."""
+    v = hc.get(meal)
+    return (v, True) if v is not None else (DEFAULT_PEOPLE[meal], False)
+
+
+def meal_people(meal, voters, hc):
+    planned, guests = planned_people(meal, hc)
+    return max(planned, voters), guests
+
+
+def consume_headcount_day(hc):
+    """After a successful compile: one day of the override is used up;
+    when no days are left, both meals go back to as usual."""
+    if not headcount_active(hc):
+        return dict(HEADCOUNT_EMPTY)
+    hc = dict(hc, days=hc["days"] - 1)
+    return hc if hc["days"] > 0 else dict(HEADCOUNT_EMPTY)
+
+
+def days_ru(n):
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "дня"
+    return "дней"
+
+
+def headcount_summary(hc):
+    """«Завтрак 6, ужин 9, ещё 3 дня» or «…, как обычно»."""
+    b, _ = planned_people("breakfast", hc)
+    d, _ = planned_people("dinner", hc)
+    tail = f"ещё {hc['days']} {days_ru(hc['days'])}" if headcount_active(hc) else "как обычно"
+    return f"Завтрак {b}, ужин {d}, {tail}"
+
+
 def compute_unavailable_dishes():
     """Список id блюд, на которые не хватает запасов на базовое число порций
     блюда (base_portions). Продукта нет в запасах вообще — блюдо тоже
@@ -363,15 +434,116 @@ async def check_admin(update: Update, command: str) -> bool:
     """Доступ к ручным командам: создатель, глава семьи по id или по username.
     Отвечает отказом сам, если доступа нет."""
     user = update.effective_user
-    allowed = bool(
+    allowed = is_admin(user)
+    logger.info(f"/{command} от id={user.id} username={user.username!r}, доступ={'да' if allowed else 'нет'}")
+    if not allowed:
+        await update.message.reply_text(ADMIN_ONLY_TEXT)
+    return allowed
+
+
+ADMIN_ONLY_TEXT = "Эта команда доступна только главе семьи."
+
+
+def is_admin(user):
+    """Creator or family head, by id or by username."""
+    return bool(
         user.id in (CREATOR_CHAT_ID, FAMILY_HEAD_CHAT_ID)
         or (FAMILY_HEAD_USERNAME
             and (user.username or "").lstrip("@").lower() == FAMILY_HEAD_USERNAME)
     )
-    logger.info(f"/{command} от id={user.id} username={user.username!r}, доступ={'да' if allowed else 'нет'}")
-    if not allowed:
-        await update.message.reply_text("Эта команда доступна только главе семьи.")
-    return allowed
+
+
+def people_text(hc, done=False):
+    b, _ = planned_people("breakfast", hc)
+    d, _ = planned_people("dinner", hc)
+    status = (f"Гости: ещё {hc['days']} {days_ru(hc['days'])}" if headcount_active(hc)
+              else "Как обычно")
+    head = "Готово." if done else "Сколько человек завтра?"
+    return f"{head}\nЗавтрак: {b} · Ужин: {d}\n{status}"
+
+
+def people_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Завтрак −", callback_data="hc|b|-"),
+         InlineKeyboardButton("Завтрак +", callback_data="hc|b|+")],
+        [InlineKeyboardButton("Ужин −", callback_data="hc|d|-"),
+         InlineKeyboardButton("Ужин +", callback_data="hc|d|+")],
+        [InlineKeyboardButton("Сбросить", callback_data="hc|reset"),
+         InlineKeyboardButton("Готово", callback_data="hc|done")],
+    ])
+
+
+PEOPLE_USAGE = (
+    "Как пользоваться:\n"
+    "/people — кнопки\n"
+    "/people 6 9 — завтра на завтрак 6, на ужин 9\n"
+    "/people 6 9 3 — то же на 3 дня\n"
+    "/people reset — как обычно"
+)
+
+
+async def people_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """How many people eat tomorrow (guests): buttons, or /people B D [days], or reset."""
+    if not await check_admin(update, "people"):
+        return
+    args = context.args or []
+    if not args:
+        hc = load_headcount()
+        await update.message.reply_text(people_text(hc), reply_markup=people_keyboard())
+        return
+    if len(args) == 1 and args[0].lower() == "reset":
+        hc = dict(HEADCOUNT_EMPTY)
+        save_headcount(hc)
+        await update.message.reply_text(f"Сброшено. {headcount_summary(hc)}")
+        return
+    if len(args) in (2, 3) and all(a.isdigit() for a in args):
+        b, d = int(args[0]), int(args[1])
+        days = int(args[2]) if len(args) == 3 else 1
+        if all(HEADCOUNT_MIN <= x <= HEADCOUNT_MAX for x in (b, d)) and 1 <= days <= HEADCOUNT_MAX:
+            hc = {"breakfast": b, "dinner": d, "days": days}
+            save_headcount(hc)
+            await update.message.reply_text(headcount_summary(hc))
+            return
+        await update.message.reply_text(
+            f"Число человек — от {HEADCOUNT_MIN} до {HEADCOUNT_MAX}, дней — от 1 до {HEADCOUNT_MAX}.\n"
+            f"Сейчас: {headcount_summary(load_headcount())}")
+        return
+    await update.message.reply_text(f"{PEOPLE_USAGE}\n\nСейчас: {headcount_summary(load_headcount())}")
+
+
+async def people_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Buttons of /people: hc|b|- hc|b|+ hc|d|- hc|d|+ hc|reset hc|done."""
+    query = update.callback_query
+    if not is_admin(query.from_user):
+        logger.info(f"hc-кнопка от id={query.from_user.id}: доступа нет")
+        await query.answer(ADMIN_ONLY_TEXT, show_alert=True)
+        return
+    await query.answer()
+    parts = query.data.split("|")
+    hc = load_headcount()
+    done = False
+    if parts[1:] == ["reset"]:
+        hc = dict(HEADCOUNT_EMPTY)
+    elif parts[1:] == ["done"]:
+        if headcount_active(hc):
+            hc["days"] = 1
+        done = True
+    elif len(parts) == 3 and parts[1] in ("b", "d") and parts[2] in ("-", "+"):
+        meal = "breakfast" if parts[1] == "b" else "dinner"
+        current, _ = planned_people(meal, hc)
+        hc[meal] = min(HEADCOUNT_MAX, max(HEADCOUNT_MIN, current + (1 if parts[2] == "+" else -1)))
+        if hc["days"] <= 0:
+            hc["days"] = 1
+    else:
+        return
+    save_headcount(hc)
+    try:
+        await query.edit_message_text(people_text(hc, done=done),
+                                      reply_markup=None if done else people_keyboard())
+    except BadRequest as e:
+        # The number did not change (already 1 or 30): Telegram refuses an identical edit.
+        if "not modified" not in str(e).lower():
+            raise
 
 
 async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -409,7 +581,7 @@ async def previewcook_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not responses:
         await update.message.reply_text("Пока никто не голосовал")
         return
-    menu, dropped = drop_unknown_dishes(compute_daily_menu(responses))
+    menu, dropped = drop_unknown_dishes(compute_daily_menu(responses, compile_headcount()))
     if not menu["breakfast"] and not menu["dinner"]:
         await update.message.reply_text("Пока никто не голосовал")
         return
@@ -653,6 +825,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/previewcook — family head only: see tomorrow's cooking messages "
         "for the current votes, sent only to you. Nothing goes to the cook "
         "and stock is not changed\n"
+        "/people — family head only: set how many people eat tomorrow "
+        f"(usually {BREAKFAST_PEOPLE} at breakfast, {DINNER_PEOPLE} at dinner), "
+        "for guests. Buttons, or /people 6 9 (breakfast 6, dinner 9), "
+        "/people 6 9 3 (for 3 days), /people reset\n"
         "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/help — show this message again"
     )
@@ -1016,13 +1192,32 @@ async def nudge_non_voters(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Не удалось напомнить {user_id}: {e}")
 
+    # Отдельно от семьи: создателю и главе семьи — одна строка про число едоков.
+    text = headcount_notice(load_headcount())
+    for chat_id in dict.fromkeys((CREATOR_CHAT_ID, FAMILY_HEAD_CHAT_ID)):
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as e:
+            logger.warning(f"Не удалось отправить число едоков {chat_id}: {e}")
 
-def _tally_meal(picks_with_names, courses):
+
+def headcount_notice(hc):
+    """«Завтра: завтрак 5 чел., ужин 7 чел. Изменить: /people», with
+    «осталось N дн.» while a /people override is on."""
+    b, _ = planned_people("breakfast", hc)
+    d, _ = planned_people("dinner", hc)
+    days = f", осталось {hc['days']} дн." if headcount_active(hc) else ""
+    return f"Завтра: завтрак {b} чел., ужин {d} чел.{days} Изменить: /people"
+
+
+def _tally_meal(picks_with_names, courses, meal, headcount):
     """Общая логика голосования для одного приёма пищи (завтрак или ужин).
     picks_with_names — список (имя, picks, вес_голоса). Вес влияет только на
-    определение победителя, но не на количество порций (participants).
-    Возвращает {course: {"dish_id", "portions", "voters"}} только для тех
-    категорий, где хоть кто-то голосовал."""
+    определение победителя, но не на количество порций.
+    Едоков people = max(число из /people или по умолчанию, проголосовавшие),
+    порций = people + PORTION_BUFFER_EXTRA.
+    Возвращает {course: {"dish_id", "portions", "people", "guests", "voters"}}
+    только для тех категорий, где хоть кто-то голосовал."""
     votes = {c: Counter() for c in courses}
     voters = {c: {} for c in courses}
     participants = 0
@@ -1037,30 +1232,35 @@ def _tally_meal(picks_with_names, courses):
                 votes[c][pick["id"]] += weight
                 voters[c].setdefault(pick["id"], []).append({"name": name})
 
+    people, guests = meal_people(meal, participants, headcount)
     winners = {}
     for c in courses:
         if votes[c]:
             dish_id, _ = votes[c].most_common(1)[0]
             winners[c] = {
                 "dish_id": dish_id,
-                "portions": participants + PORTION_BUFFER_EXTRA,
+                "portions": people + PORTION_BUFFER_EXTRA,
+                "people": people,
+                "guests": guests,
                 "voters": voters[c][dish_id],
             }
     return winners
 
 
-def compute_daily_menu(responses):
+def compute_daily_menu(responses, headcount=None):
     """Считает голоса и определяет победителей по каждой под-категории
     завтрака и ужина. Возвращает {"breakfast": {...}, "dinner": {...}},
     где каждое значение — результат _tally_meal (может быть пустым словарём,
-    если никто не голосовал)."""
+    если никто не голосовал). headcount — состояние /people (по умолчанию из
+    data/headcount.json)."""
+    headcount = load_headcount() if headcount is None else headcount
     breakfast = _tally_meal(
         [(r["name"], r.get("breakfast"), r.get("vote_weight", 1)) for r in responses.values()],
-        MEAL_ORDER["breakfast"],
+        MEAL_ORDER["breakfast"], "breakfast", headcount,
     )
     dinner = _tally_meal(
         [(r["name"], r.get("dinner"), r.get("vote_weight", 1)) for r in responses.values()],
-        MEAL_ORDER["dinner"],
+        MEAL_ORDER["dinner"], "dinner", headcount,
     )
     return {"breakfast": breakfast, "dinner": dinner}
 
@@ -1208,8 +1408,12 @@ def build_cook_pieces(menu, weekday):
                  for c in MEAL_ORDER[meal] if c in menu[meal]]
         if not items:
             continue
-        portions = items[0][1]
-        pieces.append(f"{LINE}\n{header} ({portions} portions)\n{LINE}\n\n"
+        first = next(menu[meal][c] for c in MEAL_ORDER[meal] if c in menu[meal])
+        portions = first["portions"]
+        people = first.get("people", portions - PORTION_BUFFER_EXTRA)
+        guests = " (guests)" if first.get("guests") else ""
+        pieces.append(f"{LINE}\n{header} ({people} people + {portions - people} extra = "
+                      f"{portions} portions){guests}\n{LINE}\n\n"
                       "⏰ COUNTDOWN (T = the family sits down)\n"
                       + "\n".join(countdown_lines(items, CATALOG)))
         for dish_id, p in items:
@@ -1260,6 +1464,23 @@ def plan_stock_usage(menu, inventory):
     return apply_stock_usage(inventory, stock_before, stock), shortfall
 
 
+def compile_snapshot_file():
+    return DATA_DIR / f"before_compile_{datetime.now(TIMEZONE).date()}.json"
+
+
+def compile_headcount(snapshot=None):
+    """The /people state a compile right now would use. A repeat compile on the
+    same day (/forcecompile) uses the state from before the first one, unless
+    /people was changed since — so it never uses up an extra guest day."""
+    if snapshot is None:
+        path = compile_snapshot_file()
+        snapshot = load_json(path, None) if path.exists() else None
+    headcount = load_headcount()
+    if snapshot and "headcount_before" in snapshot and snapshot.get("headcount_after") == headcount:
+        return snapshot["headcount_before"]
+    return headcount
+
+
 async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     if not COOK_CHAT_ID:
         logger.warning("COOK_CHAT_ID не задан — некому отправлять план")
@@ -1270,7 +1491,11 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Пока никто не проголосовал — пропускаю сборку")
         return
 
-    menu, dropped = drop_unknown_dishes(compute_daily_menu(responses))
+    snapshot_file = compile_snapshot_file()
+    snapshot = load_json(snapshot_file, None) if snapshot_file.exists() else None
+    headcount = compile_headcount(snapshot)
+
+    menu, dropped = drop_unknown_dishes(compute_daily_menu(responses, headcount))
     if dropped:
         logger.warning(f"Победителей нет в каталоге, пропускаю: {dropped}")
         try:
@@ -1306,17 +1531,16 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
 
     # Повторная сборка за день (/forcecompile) не должна второй раз вычитать
     # запасы и дописывать недостачу — откатываемся к состоянию до первой.
-    snapshot_file = DATA_DIR / f"before_compile_{datetime.now(TIMEZONE).date()}.json"
-    if snapshot_file.exists():
-        snapshot = load_json(snapshot_file, {})
+    if snapshot:
         save_inventory(snapshot["inventory"])
         save_json(WEEKLY_SHORTFALL_FILE, snapshot["weekly_shortfall"])
         logger.info("Повторная сборка за сегодня — восстановил запасы до первой сборки")
     else:
-        save_json(snapshot_file, {
+        snapshot = {
             "inventory": load_inventory(),
             "weekly_shortfall": load_json(WEEKLY_SHORTFALL_FILE, {}),
-        })
+        }
+        save_json(snapshot_file, snapshot)
 
     updated_inventory, shortfall = plan_stock_usage(menu, load_inventory())
     save_inventory(updated_inventory)
@@ -1334,12 +1558,24 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
 
     messages = cook_messages(menu)
     logger.info(f"Сообщение повару: {len(messages)} частей, длины: {[len(m) for m in messages]}")
+    sent = 0
     for m in messages:
         try:
             await context.bot.send_message(chat_id=COOK_CHAT_ID, text=m)
+            sent += 1
         except Exception as e:
             logger.error(f"Не удалось отправить часть сообщения повару: {e}")
         await asyncio.sleep(0.5)
+
+    # Гости разовые: после успешной сборки один день /people израсходован.
+    if sent:
+        after = consume_headcount_day(headcount)
+        save_headcount(after)
+        snapshot["headcount_before"], snapshot["headcount_after"] = headcount, after
+        save_json(snapshot_file, snapshot)
+        logger.info(f"Число едоков: было {headcount}, стало {after}")
+    else:
+        logger.error("Повару не ушло ни одной части — число едоков (/people) не трогаю")
 
 
 async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
@@ -1497,6 +1733,8 @@ def main():
     app.add_handler(CommandHandler("regenmenu", regenmenu_cmd))
     app.add_handler(CommandHandler("forcecompile", forcecompile_cmd))
     app.add_handler(CommandHandler("previewcook", previewcook_cmd))
+    app.add_handler(CommandHandler("people", people_cmd))
+    app.add_handler(CallbackQueryHandler(people_cb, pattern=r"^hc\|"))
     app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
     app.add_handler(CallbackQueryHandler(portion_callback, pattern=r"^portion\|"))
     app.add_handler(CallbackQueryHandler(rate_taste_cb, pattern=r"^rt\|"))
