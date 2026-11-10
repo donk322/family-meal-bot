@@ -1,7 +1,5 @@
 import os
-import re
 import asyncio
-import difflib
 import html
 import json
 import logging
@@ -30,7 +28,10 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from anthropic import Anthropic, APIError
+from anthropic import Anthropic
+
+from catalog.scale_recipe import load_catalog, render_dish, countdown_lines, scaled_ingredients
+from catalog.stock_check import check_dish, subtract_for_dish, to_stock_unit, CONV
 
 load_dotenv()
 
@@ -53,9 +54,6 @@ FAMILY_HEAD_VOTE_WEIGHT = int(os.environ.get("FAMILY_HEAD_VOTE_WEIGHT", "2"))
 COMPILE_HOUR = int(os.environ.get("COMPILE_HOUR", "21"))
 COMPILE_MINUTE = int(os.environ.get("COMPILE_MINUTE", "30"))
 TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Africa/Johannesburg"))
-
-GENERATE_HOUR = int(os.environ.get("GENERATE_HOUR", "16"))
-GENERATE_MINUTE = int(os.environ.get("GENERATE_MINUTE", "45"))
 
 NUDGE_HOUR = int(os.environ.get("NUDGE_HOUR", "18"))
 NUDGE_MINUTE = int(os.environ.get("NUDGE_MINUTE", "0"))
@@ -89,8 +87,6 @@ FAMILY_FILE = DATA_DIR / "family.json"
 INVENTORY_FILE = DATA_DIR / "inventory.json"
 LAST_SHOPPING_LIST_FILE = DATA_DIR / "last_shopping_list.json"
 WEEKLY_SHORTFALL_FILE = DATA_DIR / "weekly_shortfall.json"
-DISHES_FILE = BASE_DIR / "dishes.json"
-TODAY_MENU_CACHE_FILE = DATA_DIR / "generated_dishes.json"
 FOOD_PREFERENCES_FILE = DATA_DIR / "food_preferences.json"
 SERVED_BY_DATE_FILE = DATA_DIR / "served_by_date.json"  # {"YYYY-MM-DD": [{"name", "meal"}, ...]}
 SERVED_KEEP_DAYS = 7
@@ -100,26 +96,39 @@ RECENT_DISHES_DAYS = int(os.environ.get("RECENT_DISHES_DAYS", "5"))
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-DISHES = json.loads(DISHES_FILE.read_text())
-DISHES_GENERATED_DATE = None  # строка "YYYY-MM-DD" или None, если ни разу не генерировалось в эту сессию
-if TODAY_MENU_CACHE_FILE.exists():
-    try:
-        DISHES = json.loads(TODAY_MENU_CACHE_FILE.read_text())
-        logger.info("Подхватил сгенерированное меню из кэша при старте")
-        # Если кэш пережил перезапуск и записан сегодня — меню на сегодня уже есть
-        cache_date = datetime.fromtimestamp(TODAY_MENU_CACHE_FILE.stat().st_mtime, TIMEZONE).strftime("%Y-%m-%d")
-        if cache_date == datetime.now(TIMEZONE).strftime("%Y-%m-%d"):
-            DISHES_GENERATED_DATE = cache_date
-    except Exception:
-        pass
+# Фиксированное меню: 56 блюд из catalog/dishes_fixed.json (собраны из
+# recipes_src/*.txt). ИИ меню не придумывает, количества пересчитывает код.
+CATALOG = load_catalog()
 
-# "Бытовые" ингредиенты (соль, масло, специи, зелень для украшения), которые
-# почти всегда есть под рукой — не учитываются при проверке доступности блюд.
-PANTRY_STAPLES = {
-    "соль", "чёрный перец", "растительное масло", "оливковое масло",
-    "паприка", "зира", "орегано", "розмарин", "чили хлопья",
-    "уксус", "красный винный уксус", "горчица", "свежая зелень",
+# Порядок категорий в голосе, в сообщении повару и в мини-аппе.
+MEAL_ORDER = {
+    "breakfast": ("main", "extra", "dessert"),
+    "dinner": ("soup", "salad", "main", "side", "dessert"),
 }
+COURSE_LABELS_EN = {
+    "breakfast": {"main": "Main", "extra": "Extra", "dessert": "Dessert"},
+    "dinner": {"soup": "Soup", "salad": "Salad", "main": "Main", "side": "Side", "dessert": "Dessert"},
+}
+
+
+def in_pool(dish, meal, course):
+    """Подходит ли блюдо каталога в категорию (приём пищи, категория) голосования.
+    Один десерт может быть и в пуле завтрака, и в пуле ужина."""
+    cat = dish.get("category")
+    if meal == "breakfast":
+        if course == "main":
+            return cat == "breakfast_main"
+        if course == "extra":
+            return cat == "breakfast_extra"
+        if course == "dessert":
+            return cat == "dessert" and bool(dish.get("breakfast_ok"))
+        return False
+    return course in MEAL_ORDER["dinner"] and cat == course
+
+
+def pool(meal, course):
+    return [(dish_id, dish) for dish_id, dish in CATALOG.items() if in_pool(dish, meal, course)]
+
 
 # The cook is English-speaking — translate ingredient names/units wherever
 # they're shown to them directly (outside the Claude-generated menu, which
@@ -173,440 +182,84 @@ def unit_to_en(unit):
 
 
 def build_ingredient_typical_usage():
-    """Average amount_per_serving for each ingredient across every dish that uses it.
+    """Average amount per portion (amount / base_portions) for each catalog
+    stock_key across every dish that uses it, staples skipped, in stock units
+    (grams, ml, pieces — see CONV in catalog/stock_check.py).
 
     Used to estimate "servings left" for a given stock level, so we can warn
     the cook before something actually runs out.
     """
     totals, counts = {}, {}
-    for dish in DISHES.values():
-        for ing in dish["ingredients"]:
-            totals[ing["name"]] = totals.get(ing["name"], 0) + ing["amount_per_serving"]
-            counts[ing["name"]] = counts.get(ing["name"], 0) + 1
-    return {name: totals[name] / counts[name] for name in totals}
+    for dish in CATALOG.values():
+        for key, unit, amount, staple in scaled_ingredients(dish, 1):
+            if staple:
+                continue
+            totals[key] = totals.get(key, 0) + to_stock_unit(key, unit, amount)
+            counts[key] = counts.get(key, 0) + 1
+    return {key: totals[key] / counts[key] for key in totals}
 
 
 INGREDIENT_TYPICAL_USAGE = build_ingredient_typical_usage()
 
-FAMILY_FAVORITES_NOTE = (
-    "\n\nСемья любит эти блюда и продукты. Старайся выбирать идеи "
-    "отсюда, если хватает продуктов в запасах (можно не дословно, а "
-    "близко по смыслу): бекон; куриные ножки, бёдра, крылышки, филе; "
-    "котлеты из говядины, свинины или курицы; бургеры (без булки или "
-    "на безглютеновом хлебе); жареные грибы; жареная цветная капуста; "
-    "лапша ширатаки с овощами на сковороде; мясной салат (авокадо "
-    "вместо картошки); сырный салат; стейк говяжий; тонко нарезанные "
-    "кусочки говядины; свекольный салат с чесноком и майонезом; яйца "
-    "варёные с майонезом; борщ; щи; сырный суп; суп с фрикадельками; "
-    "фаршированные перцы; грибы с начинкой из крем-сыра и пармезана; "
-    "сырники с крем-сыром; блинчики с крем-сыром; творожная "
-    "запеканка; жареный халуми. Сложные блюда из этого списка "
-    "(фаршированные перцы, грибы с начинкой, суп с фрикадельками) "
-    "предлагай только в максимально упрощённом виде или пропусти.\n"
-)
-
-BREAKFAST_NOTE = (
-    "\n\nПРАВИЛА ДЛЯ ЗАВТРАКА. Завтрак самый важный и самый сытный "
-    "приём пищи в этой семье, они едят после тренировки. Поэтому: "
-    "1) Все блюда завтрака высокобелковые и плотные: яйца, мясо, "
-    "птица, рыба, сыр, субпродукты, в больших порциях. "
-    "2) Никаких крахмалистых углеводов на завтрак: картофель, рис, "
-    "макароны, лапша, гречка, любые крупы и каши. Хлеб допустим только "
-    "как небольшая часть блюда, не как основа. "
-    "3) Гарнир на завтрак овощной или белковый (жареные грибы, "
-    "цветная капуста, овощи, авокадо, бекон), не крахмальный. "
-    "4) Супа на завтрак нет. "
-    "5) Десерт на завтрак может быть сладким лакомством, это нормально, "
-    "но простым.\n"
-)
-
-BANANA_NOTE = (
-    "\n\nБананы используй очень редко, а в десертах особенно: только "
-    "если больше нечего предложить. Предпочитай ягоды, греческий "
-    "йогурт, орехи, мёд.\n"
-)
-
-LATIN_TO_CYRILLIC = str.maketrans(
-    "aceopxykmtbhACEOPXYKMTBH",
-    "асеорхукмтвнАСЕОРХУКМТВН",
-)
+# Inventory keeps old products under Russian keys with Russian units and new
+# ones under English keys as typed in /addstock; the catalog uses lowercase
+# English stock_key in g / ml / pcs.
+RU_UNIT = {"г": "g", "мл": "ml", "шт": "pcs", "кг": "kg", "л": "l"}
 
 
-def fix_mixed_script(name):
-    """Заменяет латинские буквы, похожие на русские, на русские — но только
-    в словах, где уже есть кириллица («укроp» → «укроп»). Чисто латинские
-    названия (повар мог добавить продукт по-английски) не трогает."""
-    return " ".join(
-        word.translate(LATIN_TO_CYRILLIC)
-        if any(is_cyrillic(ch) for ch in word) else word
-        for word in name.split(" ")
-    )
+def inventory_stock_name(key):
+    return (to_en(key) if key in INGREDIENT_EN else key).strip().lower()
 
 
-def is_cyrillic(ch):
-    return "а" <= ch.lower() <= "я" or ch.lower() == "ё"
+def inventory_base_factor(item):
+    """kg and l are stored as is in inventory, the catalog counts g and ml."""
+    unit = RU_UNIT.get(item.get("unit", ""), item.get("unit", ""))
+    return 1000.0 if unit in ("kg", "l") else 1.0
 
 
-def match_latin_as_wildcard(name, known):
-    """Запасной вариант для опечаток вида «укроp», где латинская буква стоит
-    не вместо похожей русской, а вместо другой (p вместо п): латинские буквы
-    внутри русского слова считаются любой буквой. Возвращает название из
-    known, только если подходит ровно одно."""
-    if not any(is_cyrillic(ch) for ch in name):
-        return None
-    candidates = [
-        k for k in known
-        if len(k) == len(name)
-        and all(a == b or (a.isascii() and a.isalpha()) for a, b in zip(name, k))
-    ]
-    return candidates[0] if len(candidates) == 1 else None
+def inventory_as_english_stock(inv=None):
+    """{catalog stock_key: amount in g/ml/pcs} for check_dish and
+    subtract_for_dish, plus {stock_key: first inventory key with that name}."""
+    inv = load_inventory() if inv is None else inv
+    stock, en_to_inv = {}, {}
+    for key, item in inv.items():
+        name = inventory_stock_name(key)
+        amount = float(item.get("amount", 0)) * inventory_base_factor(item)
+        stock[name] = stock.get(name, 0) + amount
+        en_to_inv.setdefault(name, key)
+    return stock, en_to_inv
 
 
-def check_generated_ingredients(generated, inventory):
-    """Сверяет названия ингредиентов сгенерированных блюд с запасами.
-    Латинские буквы внутри русских слов сначала заменяются на русские,
-    почти совпавшее название (опечатка) заменяется на название из запасов;
-    блюдо с ингредиентом, которого нет ни в запасах, ни среди бытовых,
-    выбрасывается. Несовпадение единицы с запасами только пишется в лог.
-    Возвращает (оставшиеся блюда, {id выброшенного блюда: ненайденные названия})."""
-    known = list(inventory) + sorted(PANTRY_STAPLES | {"вода"})
-    checked, dropped = {}, {}
-    for dish_id, dish in generated.items():
-        unknown = []
-        for ing in dish.get("ingredients", []):
-            name = fix_mixed_script(ing["name"])
-            match = difflib.get_close_matches(name, known, n=1, cutoff=0.85)
-            if not match:
-                wildcard = match_latin_as_wildcard(ing["name"], known)
-                match = [wildcard] if wildcard else []
-            if not match:
-                unknown.append(ing["name"])
-                continue
-            if match[0] != ing["name"]:
-                logger.info(f"{dish_id}: ингредиент «{ing['name']}» → «{match[0]}»")
-                ing["name"] = match[0]
-            stock_unit = inventory.get(ing["name"], {}).get("unit")
-            if stock_unit and ing.get("unit") != stock_unit:
-                logger.warning(
-                    f"{dish_id}: единица у «{ing['name']}» — {ing.get('unit')}, "
-                    f"а в запасах — {stock_unit}"
-                )
-        if unknown:
-            logger.warning(f"Выбрасываю {dish_id} ({dish.get('name')}): нет в запасах {unknown}")
-            dropped[dish_id] = unknown
+def apply_stock_usage(inv, stock_before, stock_after):
+    """Write what subtract_for_dish used (stock_before - stock_after, in g/ml/pcs)
+    back into the inventory. A name can sit under several inventory keys
+    (Russian and English) — take from them in order."""
+    inv = {k: dict(v) for k, v in inv.items()}
+    for name, before in stock_before.items():
+        used = before - stock_after.get(name, before)
+        if used <= 1e-9:
             continue
-        checked[dish_id] = dish
-    return checked, dropped
+        for key, item in inv.items():
+            if used <= 1e-9:
+                break
+            if inventory_stock_name(key) != name:
+                continue
+            factor = inventory_base_factor(item)
+            have = float(item.get("amount", 0)) * factor
+            take = min(have, used)
+            item["amount"] = round((have - take) / factor, 2)
+            used -= take
+    return inv
 
 
-# Почти пустые позиции не показываем модели при генерации меню: на 0.19 г
-# ягод или 6 г огурца она строит блюда, которые не из чего приготовить.
-# Соль, перец, масло и сухие специи в промпте и так «всегда есть».
-# Английские единицы — у продуктов, которые /addstock добавил не из INGREDIENT_EN.
-MENU_MIN_STOCK = {
-    "г": 20, "мл": 20, "кг": 0.02, "л": 0.02, "шт": 0.5,
-    "g": 20, "ml": 20, "kg": 0.02, "l": 0.02, "pcs": 0.5, "pc": 0.5,
-}
-
-
-def usable_stock(inventory):
-    return {
-        name: info for name, info in inventory.items()
-        if info.get("amount", 0) > 0
-        and info.get("amount", 0) >= MENU_MIN_STOCK.get(info.get("unit"), 0)
-    }
-
-
-# Hand-written dishes from the static catalog, shown to Claude as the target
-# level of detail and simplicity (chicken with vegetables is left out on
-# purpose: the cook doesn't make it well).
-REFERENCE_DISH_IDS = [
-    "breakfast_bacon_eggs",
-    "breakfast_steak_eggs",
-    "breakfast_chicken_thigh_pan",
-    "dinner_chicken_patties_mash",
-    "dinner_pork_patties",
-    "dinner_starter_borscht",
-]
-
-
-def build_reference_text():
-    try:
-        static = json.loads(DISHES_FILE.read_text())
-    except Exception:
-        return ""
-    reference = {k: static[k] for k in REFERENCE_DISH_IDS if k in static}
-    if not reference:
-        return ""
-    return (
-        "\n\nВот примеры рецептов нужного уровня. Бери с них пример "
-        "по детализации и простоте шагов (не копируй сами блюда):\n"
-        + json.dumps(reference, ensure_ascii=False, indent=1)
-        + "\n"
-    )
-
-
-async def generate_daily_menu_options(context: ContextTypes.DEFAULT_TYPE):
-    """Раз в день, перед вечерним напоминанием, просит Claude придумать
-    меню на завтра ИЗ ТОГО, ЧТО РЕАЛЬНО ЕСТЬ в запасах, и подменяет
-    глобальный DISHES этими блюдами — весь остальной код (расчёт
-    порций, вычитание из запасов, сборка сообщения повару) работает
-    с этим точно так же, как раньше работал со статичным каталогом.
-    Возвращает None, если меню готово, иначе причину сбоя для создателя."""
-    global DISHES, INGREDIENT_TYPICAL_USAGE
-
-    all_stock = load_inventory()
-    inventory = usable_stock(all_stock)
-    skipped = [f"{name} {info.get('amount')} {info.get('unit')}"
-               for name, info in all_stock.items() if name not in inventory]
-    if skipped:
-        logger.info(f"Почти пустые позиции не передаю в генерацию меню: {', '.join(skipped)}")
-    if not inventory:
-        logger.warning("Запасы пусты — пропускаю генерацию меню, оставляю прошлый DISHES")
-        return "пустые запасы"
-
-    inventory_lines = "\n".join(
-        f"{name}: {info['amount']} {info['unit']}" for name, info in inventory.items()
-    )
-
-    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
-    dislikes = prefs.get("dislikes", [])
-    ratings = prefs.get("ratings", {})
-    disliked_dishes = [name for name, r in ratings.items() if r.get("down", 0) > r.get("up", 0)]
-
-    dislikes_note = (
-        f"\n\nСемья не любит эти продукты — не используй их вообще, ни в "
-        f"одном блюде: {', '.join(dislikes)}.\n" if dislikes else ""
-    )
-    bad_dishes_note = (
-        f"\nЭти блюда семье не понравились раньше — не предлагай их снова "
-        f"и не предлагай что-то очень похожее: {', '.join(disliked_dishes)}.\n"
-        if disliked_dishes else ""
-    )
-    liked_dishes = [name for name, r in ratings.items()
-                    if r.get("up", 0) > r.get("down", 0)]
-    liked_note = (
-        f"\nЭти блюда семье понравились. Делай что-то в таком же духе: "
-        f"{', '.join(liked_dishes)}.\n" if liked_dishes else ""
-    )
-
-    too_much_dishes = [name for name, r in ratings.items()
-                       if r.get("portion_much", 0) > r.get("portion_right", 0) + r.get("portion_little", 0)]
-    too_little_dishes = [name for name, r in ratings.items()
-                         if r.get("portion_little", 0) > r.get("portion_right", 0) + r.get("portion_much", 0)]
-
-    portion_note = ""
-    if too_much_dishes:
-        portion_note += (
-            f"\nЭтих блюд обычно готовится слишком много — если предложишь "
-            f"что-то похожее, укажи чуть меньший amount_per_serving: "
-            f"{', '.join(too_much_dishes)}.\n"
-        )
-    if too_little_dishes:
-        portion_note += (
-            f"\nЭтих блюд обычно не хватает — если предложишь что-то "
-            f"похожее, укажи чуть больший amount_per_serving: "
-            f"{', '.join(too_little_dishes)}.\n"
-        )
-
-    recent = load_json(RECENT_DISHES_FILE, [])
-    recent_dish_names = [name for entry in recent for name in entry.get("dishes", [])]
-    recent_note = (
-        f"\n\nЭти блюда уже готовились в последние {RECENT_DISHES_DAYS} дней — "
-        f"не повторяй их снова, придумай другие варианты: "
-        f"{', '.join(recent_dish_names)}.\n" if recent_dish_names else ""
-    )
-
-    egg_variety_note = (
-        "\n\nЕсли основное блюдо на завтрак связано с яйцами — обязательно "
-        "меняй способ приготовления день ото дня: яичница, яйца-скрэмбл, "
-        "варёные яйца, омлет, фриттата, запечённые в духовке яйца и "
-        "похожие простые варианты. Не предлагай один и тот же способ (например, "
-        "омлет) несколько дней подряд — смотри на список недавних блюд выше, "
-        "чтобы понять, что уже было.\n"
-    )
-
-    prompt = (
-        "Ты составляешь меню для семьи на 7 человек. Готовит человек без "
-        "кулинарного опыта, который делает ровно то, что написано, и не "
-        "понимает ничего «на глаз». Нужны простые, знакомые, вкусные блюда, "
-        "а не ресторанные эксперименты. Качество важнее количества и "
-        "оригинальности: предлагай только то, в чём уверен, что оно "
-        "получится вкусным при простом исполнении.\n\n"
-        "Ниже точный список продуктов, которые сейчас реально есть на "
-        "кухне (в граммах/мл/штуках). Придумай меню на завтра без глютена "
-        "(кроме их собственного безглютенового хлеба, если он есть в "
-        "списке — других заменителей глютена не используй, если их нет "
-        "в списке явно).\n\n"
-        f"Продукты в наличии:\n{inventory_lines}\n"
-        + FAMILY_FAVORITES_NOTE + build_reference_text()
-        + BREAKFAST_NOTE + BANANA_NOTE
-        + dislikes_note + bad_dishes_note + liked_note + portion_note
-        + recent_note + egg_variety_note +
-        "\nКатегории и сколько вариантов придумать в каждой:\n"
-        "Завтрак: main (3 варианта), meat (2), cold_starter (1), "
-        "hot_starter (1), side (1), sauce (1), dessert (1). Категории soup "
-        "на завтрак НЕТ, блюда breakfast/soup не генерируй вообще.\n"
-        "Ужин: starter (1), hot_starter (1), soup (1), main (3), side (2), "
-        "sauce (1), dessert (1).\n\n"
-        "Обязательные категории (main и meat на завтрак, main и side на "
-        "ужин) пропускать нельзя. Для необязательных: если нет "
-        "по-настоящему хорошего простого блюда из имеющихся продуктов, "
-        "просто не включай ни одного блюда этой категории в ответ вместо "
-        "слабого блюда.\n\n"
-        "ПРАВИЛА ПРОСТОТЫ (обязательны):\n"
-        "1. Только знакомые домашние блюда и техники: пожарить на "
-        "сковороде, сварить, запечь в духовке, потушить, нарезать, "
-        "перемешать.\n"
-        "2. Нельзя: сырая говядина или рыба как готовое блюдо (карпаччо, "
-        "тартар), яйца пашот, муссы и кремы, взбитые сливки, "
-        "соусы-эмульсии, фламбе, карамелизация сахара, любые «шеф-приёмы».\n"
-        "3. Из техники допустимы только: плита, сковорода, кастрюля, "
-        "духовка, нож, доска, ложка, лопатка, тёрка, шумовка, дуршлаг, "
-        "миска. Не требуй блендер, миксер, "
-        "кухонный термометр, гриль-сковороду. Супы только непротёртые.\n"
-        "4. Не больше 8 ингредиентов (соль, перец, масло, сухие специи не "
-        "считаются) и не больше 10 шагов в рецепте. Один шаг — одно "
-        "действие: не «нарежьте курицу, картофель и лук», а отдельный шаг "
-        "на каждый продукт.\n"
-        "5. Всегда точные количества, никаких «по вкусу». Меры только "
-        "бытовые: столовая ложка (15 мл), чайная ложка (5 мл), минуты, "
-        "цвет или признак готовности («до золотистой корочки», «пока не "
-        "исчезнет розовый цвет внутри»). Соль, чёрный перец и специи тоже "
-        "с количеством прямо в шаге: не «посолите и поперчите», а "
-        "«добавьте 1/4 чайной ложки соли и щепотку чёрного перца».\n"
-        "6. В каждом шаге: что делать, на каком огне, сколько минут, как "
-        "понять, что готово.\n"
-        "7. Всегда конкретное название продукта: какой именно сыр "
-        "(пармезан или чеддер), какой именно лук, какая именно часть "
-        "курицы. Не просто «сыр» или «зелень».\n"
-        "8. Названия блюд простые и понятные, без витиеватых.\n"
-        "9. Все количества в шагах рецепта (граммы, мл воды, ложки, штуки) "
-        "пиши на ОДНУ порцию, так же как amount_per_serving в ingredients. "
-        "На нужное число порций их пересчитают при отправке повару.\n\n"
-        "СТРОГИЕ правила по продуктам:\n"
-        "1. Каждое блюдо должно быть реально приготовимо ИЗ ТОГО, ЧТО ЕСТЬ "
-        "В СПИСКЕ ВЫШЕ — не придумывай ингредиенты, которых там нет, "
-        "кроме соли, чёрного перца, растительного/оливкового масла и "
-        "обычных сухих специй (паприка, зира, орегано, чили хлопья, "
-        "уксус) — это всегда считается, что есть под рукой, даже если "
-        "не в списке.\n"
-        "2. Названия ингредиентов в поле \"ingredients\" должны СОВПАДАТЬ "
-        "БУКВАЛЬНО с названиями из списка продуктов выше — то же слово, "
-        "тот же регистр, никаких синонимов.\n"
-        "3. Единица (unit) ингредиента должна быть ТОЧНО той, что указана у "
-        "этого продукта в списке выше: если лук, чеснок, перец или морковь "
-        "в запасах в граммах, пиши их в граммах (например, 40 г лука), а не "
-        "«0.3 шт». Воду в ingredients не включай.\n"
-        "4. Не предлагай блюдо, для которого на одну порцию нужно больше "
-        "конкретного продукта, чем реально есть в наличии.\n"
-        "5. Все блюда без глютена.\n\n"
-        "Верни ТОЛЬКО валидный JSON, без какого-либо текста до или после, "
-        "в виде плоского словаря id -> блюдо, в точности такой структуры "
-        "(это должно совпадать со схемой существующего dishes.json — "
-        "meal_type, course, description, ingredients с unit и "
-        "amount_per_serving на ОДНУ порцию, recipe_steps, serving_note):\n\n"
-        "{\n"
-        '  "b_main_1": {"name": "...", "meal_type": "breakfast", '
-        '"course": "main", "description": "...", "ingredients": '
-        '[{"name": "...", "unit": "г", "amount_per_serving": 100}], '
-        '"recipe_steps": ["..."], "serving_note": "..."},\n'
-        '  "b_meat_1": {"name": "...", "meal_type": "breakfast", '
-        '"course": "meat", ...},\n'
-        "  ... (аналогично для cold_starter, hot_starter, side, sauce, "
-        "dessert на завтрак, у каждого блюда, включая main, course = "
-        "точное название категории)\n"
-        '  "d_starter_1": {"name": "...", "meal_type": "dinner", '
-        '"course": "starter", ...},\n'
-        "  ... (аналогично для hot_starter, soup, main, side, sauce, "
-        "dessert на ужин)\n"
-        "}\n\n"
-        "id — короткий уникальный идентификатор латиницей вида "
-        '"b_main_1", "d_soup_1" (b_ для завтрака, d_ для ужина, дальше '
-        "название категории и номер по порядку)."
-    )
-
-    # Размышления выключены: они съедали лимит токенов, и JSON с меню
-    # обрывался. Streaming оставлен — без него SDK не даёт ставить такой
-    # max_tokens.
-    text_parts = []
-    try:
-        with client.messages.stream(
-            model="claude-sonnet-5",
-            max_tokens=16000,
-            thinking={"type": "disabled"},
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            for chunk in stream.text_stream:
-                text_parts.append(chunk)
-            final_message = stream.get_final_message()
-    except APIError as e:
-        logger.error(f"Генерация меню: ошибка API: {e}. Оставляю прошлый DISHES.")
-        return f"ошибка API: {e}"
-    logger.info(
-        f"Генерация меню: stop_reason={final_message.stop_reason}, "
-        f"output_tokens={final_message.usage.output_tokens}"
-    )
-    text = "".join(text_parts).strip()
-    if final_message.stop_reason != "end_turn":
-        logger.error(
-            f"Ответ с меню оборвался ({final_message.stop_reason}), "
-            f"начало ответа: {text[:300]!r}. Оставляю прошлый DISHES."
-        )
-        return f"обрыв ({final_message.stop_reason})"
-
-    # На случай, если ответ обёрнут в ```json ... ```
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-
-    try:
-        generated = json.loads(text)
-        if not isinstance(generated, dict):
-            raise ValueError(f"в ответе {type(generated).__name__}, а не словарь блюд")
-    except ValueError as e:  # JSONDecodeError тоже ValueError
-        logger.error(
-            f"Не удалось распарсить сгенерированное меню: {e}. "
-            f"Первые 300 символов ответа: {text[:300]!r}. Оставляю прошлый DISHES."
-        )
-        return "ошибка разбора JSON"
-
-    total = len(generated)
-    generated, dropped = check_generated_ingredients(generated, inventory)
-    missing = Counter(name for names in dropped.values() for name in set(names))
-    logger.info(
-        f"Сверка с запасами: выброшено {len(dropped)} из {total} блюд"
-        + (": " + ", ".join(f"«{name}» — {n}" for name, n in missing.most_common()) if missing else "")
-    )
-    if not generated:
-        logger.error("После сверки с запасами не осталось ни одного блюда. Оставляю прошлый DISHES.")
-        return f"сверка выбросила все блюда: не нашлись {', '.join(missing) or 'ингредиенты'}"
-
-    global DISHES_GENERATED_DATE
-    DISHES_GENERATED_DATE = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-
-    DISHES = generated
-    save_json(TODAY_MENU_CACHE_FILE, DISHES)
-    INGREDIENT_TYPICAL_USAGE = build_ingredient_typical_usage()
-    logger.info(f"Сгенерировано меню на сегодня: {len(DISHES)} блюд")
-    return None
-
-
-async def scheduled_menu_generation(context: ContextTypes.DEFAULT_TYPE):
-    """Плановая генерация (и догоняющая при старте): о сбое пишем создателю,
-    иначе его видно только по «Меню ещё не готово» в мини-аппе."""
-    reason = await generate_daily_menu_options(context)
-    if reason:
-        try:
-            await context.bot.send_message(
-                chat_id=CREATOR_CHAT_ID,
-                text=f"Не получилось сгенерировать меню: {reason}. Запустите /regenmenu",
-            )
-        except Exception as e:
-            logger.error(f"Не удалось предупредить создателя: {e}")
-
+def stock_unit_for(key):
+    """Unit the catalog counts this stock_key in (after CONV), for lists and forms."""
+    units = Counter()
+    for dish in CATALOG.values():
+        for k, unit, _, staple in scaled_ingredients(dish, 1):
+            if k == key and not staple:
+                units[CONV.get(k, {}).get(unit, (unit,))[0]] += 1
+    return units.most_common(1)[0][0] if units else "g"
 
 # ---------- storage helpers ----------
 
@@ -637,20 +290,12 @@ def save_inventory(inventory):
 
 
 def compute_unavailable_dishes():
-    """Список id блюд, которые нельзя приготовить — не хватает ингредиента
-    даже на одну порцию. Мелкие "бытовые" ингредиенты (соль, масло, специи,
-    зелень для украшения) не блокируют блюдо — почти всегда есть под рукой."""
-    inventory = load_inventory()
-    unavailable = []
-    for dish_id, dish in DISHES.items():
-        for ing in dish["ingredients"]:
-            if ing["name"] in PANTRY_STAPLES:
-                continue
-            have = inventory.get(ing["name"], {}).get("amount", 0)
-            if have < ing["amount_per_serving"]:
-                unavailable.append(dish_id)
-                break
-    return unavailable
+    """Список id блюд, на которые не хватает запасов на базовое число порций
+    блюда (base_portions). Продукта нет в запасах вообще — блюдо тоже
+    недоступно. Staple (соль, перец, масло, сухие специи, вода) не проверяются."""
+    stock, _ = inventory_as_english_stock()
+    return [dish_id for dish_id, dish in CATALOG.items()
+            if not check_dish(dish, dish["base_portions"], stock)[0]]
 
 
 def today_responses_file():
@@ -687,17 +332,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     greeting = (
         f"Привет, {user.first_name}! Записал тебя в список.\n\n"
-        f"Каждый вечер в {REMINDER_HOUR:02d}:{REMINDER_MINUTE:02d} буду присылать кнопку — меню каждый "
-        "день новое, его придумывает ИИ прямо под то, что реально есть на "
-        "кухне. Выбираешь по одному варианту в каждой категории (завтрак: "
-        "Основное, Мясное, Холодные/Горячие закуски, Гарнир, Суп, Соус, "
-        "Десерт; ужин — то же самое плюс Стартер) — какие-то категории "
-        "обязательные, какие-то нет, форма подскажет.\n\n"
+        f"Каждый вечер в {REMINDER_HOUR:02d}:{REMINDER_MINUTE:02d} буду присылать кнопку голосования. "
+        "Меню фиксированное: блюда из нашего списка, выбираете по одному в "
+        "каждой категории (завтрак: Основное блюдо, Дополнение, Десерт; "
+        "ужин: Суп, Салат, Основное блюдо, Гарнир, Десерт). Обязательно "
+        "только основное блюдо, остальное по желанию. Блюда, для которых "
+        "сейчас нет продуктов, показаны серыми.\n\n"
         f"Если кто-то забудет проголосовать — в {NUDGE_HOUR:02d}:{NUDGE_MINUTE:02d} придёт ещё одно "
         "личное напоминание, но только тем, кто ещё не проголосовал.\n\n"
         "После еды можно написать боту /rate — придут кнопки по каждому "
-        "сегодняшнему блюду: понравилось или нет, и хватило ли порции. Это "
-        "помогает ИИ в следующий раз готовить точнее под вкусы семьи.\n\n"
+        "сегодняшнему блюду: понравилось или нет, и хватило ли порции. Так "
+        "видно, какие блюда семье нравятся.\n\n"
         "Можешь нажать кнопку голосования и сейчас, чтобы попробовать."
     )
 
@@ -730,24 +375,8 @@ async def check_admin(update: Update, command: str) -> bool:
 
 
 async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ручной перезапуск генерации меню — только для главы семьи. Нужен,
-    когда деплой/рестарт после GENERATE_HOUR:GENERATE_MINUTE сбросил
-    сегодняшнее меню и мини-апп показывает «Меню ещё не готово»."""
-    if not await check_admin(update, "regenmenu"):
-        return
-
-    await update.message.reply_text("Генерирую меню на сегодня, это займёт пару минут…")
-    reason = await generate_daily_menu_options(context)
-    if not reason:
-        await update.message.reply_text(f"Готово: {len(DISHES)} блюд, можно голосовать.")
-        return
-    text = f"Не получилось сгенерировать меню: {reason}. Подробности в логах Render."
-    await update.message.reply_text(text)
-    if update.effective_user.id != CREATOR_CHAT_ID:
-        try:
-            await context.bot.send_message(chat_id=CREATOR_CHAT_ID, text=text)
-        except Exception as e:
-            logger.error(f"Не удалось предупредить создателя: {e}")
+    """Раньше перезапускала генерацию меню ИИ. Меню теперь фиксированное."""
+    await update.message.reply_text("Меню теперь фиксированное, генерация не нужна.")
 
 
 async def forcecompile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -885,33 +514,52 @@ async def restock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Готово, запасы пополнены по последнему списку покупок.")
 
 
-async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    inventory = load_inventory()
-    missing = {}
-    for dish in DISHES.values():
-        for ing in dish["ingredients"]:
-            if ing["name"] in PANTRY_STAPLES:
-                continue
-            needed_for_batch = ing["amount_per_serving"] * WHATSTOBUY_SERVINGS
-            have = inventory.get(ing["name"], {}).get("amount", 0)
-            shortfall = needed_for_batch - have
-            if shortfall > 0:
-                existing = missing.get(ing["name"])
-                if not existing or existing["amount"] < shortfall:
-                    missing[ing["name"]] = {"amount": round(shortfall, 1), "unit": ing["unit"]}
+WHATSTOBUY_TOP = 15
 
-    if not missing:
+
+def whatstobuy_ranking(stock):
+    """Like catalog/report_now.py: for every product that blocks a dish (at its
+    base number of portions) -> how many dishes wait for ONLY this product,
+    in how many dishes it is short, and the biggest shortfall in stock units.
+    Returns (blocked dish count, [(key, only, any, shortfall)] best first)."""
+    only, anyc, short = Counter(), Counter(), {}
+    blocked = 0
+    for dish in CATALOG.values():
+        ok, missing = check_dish(dish, dish["base_portions"], stock)
+        if ok:
+            continue
+        blocked += 1
+        keys = [m[0] for m in missing]
+        for key, need, have in missing:
+            anyc[key] += 1
+            short[key] = max(short.get(key, 0), need - have)
+        if len(keys) == 1:
+            only[keys[0]] += 1
+    ranking = sorted(anyc, key=lambda k: (-only[k], -anyc[k], k))
+    return blocked, [(k, only[k], anyc[k], short[k]) for k in ranking]
+
+
+def fmt_amount(x):
+    return f"{x:.1f}".rstrip("0").rstrip(".")
+
+
+async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stock, _ = inventory_as_english_stock()
+    blocked, ranking = whatstobuy_ranking(stock)
+    if not ranking:
         await update.message.reply_text(
-            "Everything's in stock — any dish on the menu can be made right now."
+            "Everything's in stock — every dish on the menu can be made right now."
         )
         return
 
     lines = [
-        f"- {to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}"
-        for name, item in sorted(missing.items())
+        f"{i}. {key}: buy at least {fmt_amount(amount)} {stock_unit_for(key)}. "
+        f"Unlocks {only} dish{'es' if only != 1 else ''} on its own, missing in {n}."
+        for i, (key, only, n, amount) in enumerate(ranking[:WHATSTOBUY_TOP], 1)
     ]
     await update.message.reply_text(
-        "To unlock more dishes from the menu, buy:\n" + "\n".join(lines)
+        f"{blocked} of {len(CATALOG)} dishes can't be made right now. "
+        "Buy these first to unlock the most dishes:\n\n" + "\n".join(lines)
     )
 
 
@@ -935,16 +583,17 @@ async def shoppinglist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Here's how this bot works, start to finish:\n\n"
-        "Every day around 16:45, the bot looks at what's actually in the "
-        "kitchen and asks AI to come up with tonight's and tomorrow's menu "
-        "options — only dishes that can really be made from what's in "
-        "stock. Around 17:30 the family gets a message to vote on their "
-        "favorites (breakfast: Main, Meat, Cold/Hot Appetizer, Side, Soup, "
-        "Sauce, Dessert; dinner: the same categories, plus Starter). "
-        "Anyone who hasn't voted yet gets one more reminder around 18:00. "
-        "By around 18:30, you get this chat's message: the winning dishes, "
-        "scaled to the right number of portions, with full step-by-step "
-        "recipes — that's your instructions for the day.\n\n"
+        "The menu is fixed: a set list of our dishes with tested recipes. "
+        f"Around {REMINDER_HOUR:02d}:{REMINDER_MINUTE:02d} the family gets a "
+        "message to vote for tomorrow, one dish per category (breakfast: "
+        "Main, Extra, Dessert; dinner: Soup, Salad, Main, Side, Dessert). "
+        "Only the Main is required. Dishes we don't have the products for "
+        "are greyed out. Anyone who hasn't voted yet gets one more reminder "
+        f"around {NUDGE_HOUR:02d}:{NUDGE_MINUTE:02d}. Around "
+        f"{COMPILE_HOUR:02d}:{COMPILE_MINUTE:02d}, you get this chat's "
+        "message: the winning dishes, scaled to the right number of "
+        "portions, with full step-by-step recipes — that's your "
+        "instructions for the next day.\n\n"
         "A couple of things worth knowing:\n"
         "- Portions already include a small buffer for seconds — you don't "
         "need to add extra yourself.\n"
@@ -969,14 +618,14 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "the name.\n"
         "/removestock <name> — remove a product entirely, in case "
         "something got added by mistake\n"
-        "/whatstobuy — see what's missing to unlock more dishes from "
-        "today's menu, with exact amounts\n"
+        "/whatstobuy — see which products to buy first to unlock the most "
+        "dishes from the menu, with amounts\n"
         "/shoppinglist — see the current shopping list accumulated so far "
         "this week (a fuller version also arrives automatically once a "
         "week, grouped by store section)\n"
         "/rate — rate today's dishes (👍/👎 for taste, and whether the "
-        "portion size was right) — this shapes what the AI suggests going "
-        "forward\n"
+        "portion size was right) — this shows which dishes the family "
+        "likes\n"
         "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/help — show this message again"
     )
@@ -1266,23 +915,26 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    def valid_pick(pick):
+    def valid_pick(meal, course, pick):
+        """Only a catalog dish from this category's pool counts; doneness and
+        egg choices are not used in this version."""
         if not pick or not isinstance(pick, dict):
             return None
-        if pick.get("id") not in DISHES:
+        dish = CATALOG.get(pick.get("id"))
+        if not dish or not in_pool(dish, meal, course):
             return None
-        return pick
+        return {"id": pick["id"]}
 
     breakfast_raw = data.get("breakfast") or {}
     breakfast_pick = {
-        course: valid_pick(breakfast_raw.get(course))
-        for course in ("main", "meat", "cold_starter", "hot_starter", "side", "soup", "sauce", "dessert")
+        course: valid_pick("breakfast", course, breakfast_raw.get(course))
+        for course in MEAL_ORDER["breakfast"]
     }
 
     dinner_raw = data.get("dinner") or {}
     dinner_pick = {
-        course: valid_pick(dinner_raw.get(course))
-        for course in ("starter", "hot_starter", "soup", "main", "side", "sauce", "dessert")
+        course: valid_pick("dinner", course, dinner_raw.get(course))
+        for course in MEAL_ORDER["dinner"]
     }
 
     vote_weight = (
@@ -1338,38 +990,6 @@ async def nudge_non_voters(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Не удалось напомнить {user_id}: {e}")
 
 
-def apply_inventory(needed):
-    """Subtract what's in stock from what's needed.
-
-    Returns (shopping_list, updated_inventory) — shopping_list holds only the
-    shortfall (what still needs buying), updated_inventory is what's left in
-    stock after today's planned cooking uses it up.
-    """
-    inventory = load_inventory()
-    shopping_list = {}
-
-    for name, need in needed.items():
-        have = inventory.get(name, {"amount": 0.0, "unit": need["unit"]})
-        available = have["amount"]
-        shortfall = max(need["amount"] - available, 0.0)
-        leftover = max(available - need["amount"], 0.0)
-
-        if shortfall > 0:
-            shopping_list[name] = {"amount": round(shortfall, 1), "unit": need["unit"]}
-
-        inventory[name] = {"amount": round(leftover, 1), "unit": need["unit"]}
-
-    return shopping_list, inventory
-
-
-def plural_portions(n):
-    if n % 10 == 1 and n % 100 != 11:
-        return "порция"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
-        return "порции"
-    return "порций"
-
-
 def _tally_meal(picks_with_names, courses):
     """Общая логика голосования для одного приёма пищи (завтрак или ужин).
     picks_with_names — список (имя, picks, вес_голоса). Вес влияет только на
@@ -1388,9 +1008,7 @@ def _tally_meal(picks_with_names, courses):
             pick = picks.get(c)
             if pick:
                 votes[c][pick["id"]] += weight
-                voters[c].setdefault(pick["id"], []).append(
-                    {"name": name, "egg": pick.get("egg"), "meat": pick.get("meat")}
-                )
+                voters[c].setdefault(pick["id"], []).append({"name": name})
 
     winners = {}
     for c in courses:
@@ -1411,29 +1029,13 @@ def compute_daily_menu(responses):
     если никто не голосовал)."""
     breakfast = _tally_meal(
         [(r["name"], r.get("breakfast"), r.get("vote_weight", 1)) for r in responses.values()],
-        ("main", "meat", "cold_starter", "hot_starter", "side", "soup", "sauce", "dessert"),
+        MEAL_ORDER["breakfast"],
     )
     dinner = _tally_meal(
         [(r["name"], r.get("dinner"), r.get("vote_weight", 1)) for r in responses.values()],
-        ("starter", "hot_starter", "soup", "main", "side", "sauce", "dessert"),
+        MEAL_ORDER["dinner"],
     )
     return {"breakfast": breakfast, "dinner": dinner}
-
-
-def aggregate_ingredients_from_menu(menu):
-    needed = {}
-    def add_dish(dish_id, portions):
-        for ing in DISHES[dish_id]["ingredients"]:
-            key = ing["name"]
-            if key not in needed:
-                needed[key] = {"amount": 0.0, "unit": ing["unit"]}
-            needed[key]["amount"] += ing["amount_per_serving"] * portions
-
-    for item in menu["breakfast"].values():
-        add_dish(item["dish_id"], item["portions"])
-    for item in menu["dinner"].values():
-        add_dish(item["dish_id"], item["portions"])
-    return needed
 
 
 async def check_low_stock_and_alert(context: ContextTypes.DEFAULT_TYPE, inventory):
@@ -1443,10 +1045,10 @@ async def check_low_stock_and_alert(context: ContextTypes.DEFAULT_TYPE, inventor
 
     low_items = []
     for name, info in inventory.items():
-        typical = INGREDIENT_TYPICAL_USAGE.get(name)
+        typical = INGREDIENT_TYPICAL_USAGE.get(inventory_stock_name(name))
         if not typical or typical <= 0:
             continue
-        servings_left = info["amount"] / typical
+        servings_left = float(info.get("amount", 0)) * inventory_base_factor(info) / typical
         if servings_left < LOW_STOCK_SERVINGS:
             low_items.append(
                 f"{to_en(name)} — about {round(servings_left, 1)} servings left "
@@ -1457,12 +1059,6 @@ async def check_low_stock_and_alert(context: ContextTypes.DEFAULT_TYPE, inventor
         text = "⚠️ Running low, will need to buy soon:\n" + "\n".join(low_items)
         await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
 
-
-KITCHEN_FACTS = (
-    "2 large frying pans, 1 large pot (4 litres), an oven, a baking tray, "
-    "foil, paper towels, tongs, slotted spoon, spatula, grater, sharp "
-    "knife, cutting board, a kitchen thermometer, a timer"
-)
 
 # Weekday names don't depend on the server's locale this way.
 WEEKDAYS_EN = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
@@ -1498,95 +1094,11 @@ No thermometer? Press the steak with your finger: medium feels firm but springy,
 • Fish (salmon, white fish): 60°C.
 • Chicken, pork and any mince: 74°C."""
 
-COOK_FORMAT_PROMPT = """You are writing tomorrow's cooking instructions for a home cook. The cook reads English, follows instructions literally, and has little cooking experience. Write everything in clear simple English. Translate every dish name, ingredient and step into English. Leave no Russian words.
-
-THE OUTPUT IS PLAIN TEXT FOR TELEGRAM. Do NOT use markdown: no #, no **, no tables, no backticks. Use emoji and the ━ lines for structure, exactly as in the FORMAT below.
-
-KITCHEN FACTS (assume these): {kitchen_facts}. Buffet style: each dish goes on one big shared platter or bowl. Quantities already include a small extra for seconds.
-
-RULES FOR THE CONTENT
-1. Keep every ingredient, quantity, time and temperature from the dish data. Never invent ingredients. You MAY: split a step with several actions into several steps so that every step is ONE action; add short cues (what it looks like, sounds like or smells like); add warnings; add prep steps; convert spoons. Quantities inside the recipe steps in the data are for ONE portion: rewrite them for the number of portions of that dish.
-2. Be exact. Always give amounts (grams, ml, teaspoons, minutes, heat level out of 10). Never write "to taste", "a bit", "some", "a pinch" without a number. Salt and pepper always get an amount.
-3. Name products exactly. "Hard cheese" is the yellow cheddar block, never parmesan. Write "hard cheese (yellow cheddar block, NOT parmesan)" the first time in each dish. Write "parmesan" only when the data says parmesan.
-4. Meat and fish are judged with the thermometer, with a finger or visual check as backup: beef steak 55°C off the heat (rises to about 58°C, medium) unless the data asks for another doneness; fish 60°C; chicken, pork and any mince 74°C. If voters asked for a doneness, give the matching temperature (rare 50°C, medium-rare 52°C, medium 55°C, medium-well 60°C, well done 65°C, all off the heat).
-5. If the portions do not fit in one pan, split into batches (for example 3 steaks, 5 eggs, 5 bacon slices, 270 g of mushrooms per batch) and write the batch plan: "Repeat steps X to Y for the next batch".
-6. Eggs and anything that must be hot are cooked LAST. Cold dishes and long-simmering dishes are made FIRST. Prep such as slicing cheese or grating goes under GET READY, before the stove is on.
-7. Never write that the instructions are simplified or that the cook is inexperienced. Just give clear complete steps.
-8. If the family notes mention an allergy or a wish, add a ⚠️ line inside the dish it affects and say exactly how to change the dish.
-9. If there is a section for an early kids' breakfast, put it FIRST. If a dish is for one person only (plated separately, no meat), put it in its own section and add which shared dishes that person can also eat and that they do NOT eat the meat dishes.
-10. Keep each dish under about 3000 characters.
-11. Never name people and never state anyone's gender (no he, she, his, her). The data may contain names: do not repeat them. For a dish for one person, write "the person who is fasting" (or "the person who ..." matching the reason). For a doneness wish, write how many portions need it, not whose they are.
-12. COMPLETENESS: every dish in the data appears exactly once in its own section. If the same dish is in the early kids' breakfast and in the regular breakfast, write it out in full in BOTH sections. Before answering, count the dishes in the data and in your answer.
-13. SALT: 1 teaspoon of fine salt = 6 g; convert grams with this. A steak gets at most 1/2 teaspoon of salt per steak. Give salt per steak (or per portion) and make sure the total in YOU NEED matches: an amount "per batch" times the number of batches. For soup give a start and a maximum: "Add 1 teaspoon, stir for 1 minute, taste. If still flat, add 1/2 teaspoon at a time, no more than 2 teaspoons in total."
-14. NO VAGUE AMOUNTS: never write "a little", "a bit", "to taste", "as needed", "adjust". Oil always has an amount ("1 tablespoon (15 ml) of oil").
-15. DONENESS: count the doneness requests per level; portions without a request are medium. Write one line such as "Steaks: 2 x medium-rare (52°C), 6 x medium (55°C), 1 x well done (65°C)" and group the batches by doneness ("Batch 1: 3 steaks, medium, take off at 55°C"). Describe batches in pieces, not grams. Never say who asked for what.
-16. TIMES: the duration in a dish header matches its steps; "Start at T minus X" is at least the duration plus 5 minutes; the times in the countdown match the dish headers.
-17. ORDER: sections go early kids' breakfast, regular breakfast, breakfast for one person, dinner, dinner for one person. The dinner for one person comes AFTER the last shared dinner dish and BEFORE the dinner final check.
-18. SALTED WATER: whenever a step uses water for boiling, give the salt for it: "add 1 teaspoon of salt per litre of water".
-19. IN ADVANCE: never write "in advance", "beforehand" or "ahead of time" without minutes. Write "take the steaks out of the fridge 30 minutes before cooking".
-20. DURATION: the duration of a dish = prep time + its batches. Time of ONE batch: bacon 9 minutes (5 slices), eggs 4 minutes (5 eggs), steaks 11 minutes (3 steaks), mushrooms 11 minutes (270 g). The dish starts in the countdown at its duration + 5 minutes ("⏱ 35 minutes" means "Start at T minus 40 min" or earlier).
-21. TIME MATH: right under the ⏱ line of every dish write one line "Time math: " with only numbers, + and x, then "=" and the result, no words: prep + batches x batch time = total. Example for 2 batches of bacon and 3 batches of eggs: "Time math: 5 + 2 x 9 + 3 x 4 = 35". The result must equal the N in "⏱ N minutes". A dish cooked in several batches must show its batches in the time math. A dish without batches adds its prep and its cooking steps: "Time math: 10 + 5 + 45 + 15 = 75". Count only the steps of that one dish, one after another; do not plan around other dishes or shared pots. Bacon: count 1 slice = 30 g. Egg portions without a yolk request are medium yolk.
-22. SALT IN GRAMS: 1 teaspoon of fine salt = 6 g. If you give both teaspoons and grams, they must match (2 teaspoons = 12 g).
-23. PORTIONS ARE NOT EGGS: write "for the 2 portions with runny yolks (2 eggs per portion, 4 eggs in total)". Never write "the 2 eggs" when you mean portions.
-24. NO TOOL ALTERNATIVES: name one tool. Turn food with tongs: "use tongs", never "tongs or a fork". A fork appears only in a warning: "do not use a fork".
-
-FORMAT (follow exactly; replace the examples with today's real dishes)
-
-Write one section header for each meal in the data, in the order from rule 17. Section headers say "(N people)" and never "serves"; only dish headers end with "— serves N":
-
-━━━━━━━━━━━━━━━━━━━━
-☀️ REGULAR BREAKFAST (7 people)
-━━━━━━━━━━━━━━━━━━━━
-
-Right under a regular meal header, write a COUNTDOWN with only today's dishes. T = the meal is served. Use minutes before T, say which pan each dish uses, put long and cold dishes first and eggs and steaks last, and make the times realistic:
-⏰ COUNTDOWN (T = breakfast is served)
-T minus 70 min: Fruit salad and cucumber salad, then into the fridge
-T minus 55 min: Steaks with ham and cheese (pan 1)
-T minus 12 min: Eggs LAST (pan 2), so they do not go cold
-T minus 0: Everything on the table
-
-Then every dish in this exact layout:
-
-🍄 FRIED MUSHROOMS — serves 9
-⏱ 40 minutes (pan 1). Start at T minus 50 min.
-Time math: 7 + 3 x 11 = 40
-
-YOU NEED
-• Mushrooms: 810 g
-• Butter: 90 g
-• Salt: 1 teaspoon
-• Black pepper: 1/2 teaspoon
-
-GET READY
-1. Slice the mushrooms about 5 mm thick.
-2. Divide them into 3 equal piles (about 270 g each).
-
-COOK (3 batches)
-3. Heat the large pan on medium-high heat for 2 minutes. Do not add oil.
-4. Add 30 g of butter and let it melt.
-5. Add the first pile in one layer. Do not crowd the pan.
-6. Leave it for 3 minutes without stirring.
-7. Stir. Cook 6 to 8 more minutes, stirring every minute.
-✅ READY WHEN: all the water has gone from the pan and the mushrooms are golden brown.
-8. Move the mushrooms to a warm bowl and cover with foil.
-9. Repeat steps 4 to 8 with the 2nd and 3rd piles.
-⚠️ Salt at the END only. Early salt makes mushrooms watery.
-
-After the last dish of each meal, a final check:
-✅ DINNER FINAL CHECK (before you call the family)
-• one bullet per dish: where it goes and whether it is hot or cold
-• Serving spoons next to every dish
-
-Put the exact line ---SPLIT--- on its own line between sections: after the meal header with its countdown, between every two dishes, and before each final check. Never put ---SPLIT--- inside a dish.
-
-YOUR ANSWER IS ONLY THE MESSAGE. Start with the first ━ line. Write no notes, planning, calculations or explanations before, inside or after it; the only arithmetic you show is the Time math line of each dish.
-"""
-
 TG_LIMIT = 3900  # Telegram allows 4096 characters per message, keep a margin
 
 
 def sanitize_plain(text):
-    """На случай, если ИИ всё же написал markdown — сообщение уходит без parse_mode."""
+    """Сообщение уходит без parse_mode: убираем markdown-символы на всякий случай."""
     lines = []
     for ln in text.splitlines():
         ln = ln.lstrip("#").lstrip() if ln.startswith("#") else ln
@@ -1616,7 +1128,14 @@ def pack_messages(pieces, limit=TG_LIMIT):
         p = p.strip()
         if not p:
             continue
-        units.extend([p] if len(p) <= limit else split_big(p, limit))
+        if len(p) <= limit:
+            units.append(p)
+            continue
+        # A dish too long for one message (the steak sandwich) is cut between
+        # paragraphs; each part starts with "(part i of n)" so the cook knows.
+        parts = split_big(p, limit - len("(part 99 of 99)\n"))
+        units.extend(f"(part {i} of {len(parts)})\n{part}" if len(parts) > 1 else part
+                     for i, part in enumerate(parts, 1))
     msgs, cur = [], ""
     for u in units:
         if cur and len(cur) + 2 + len(u) > limit:
@@ -1629,114 +1148,82 @@ def pack_messages(pieces, limit=TG_LIMIT):
     return msgs
 
 
-# Dish headers in the cook message end with "— serves N"; section headers say "(N people)".
-COOK_DISH_LINE = re.compile(r"[—–-]\s*serves \d+\s*$", re.MULTILINE)
-VAGUE_PHRASES = ["to taste", "a little", "a bit of", "as needed", "adjust", "as much as"]
-# Строка под заголовком блюда: «⏱ N minutes ... Start at T minus M min».
-COOK_TIME_LINE = re.compile(r"⏱\s*(\d+)\s*min.*?Start at T minus (\d+)\s*min", re.IGNORECASE)
+LINE = "━━━━━━━━━━━━━━━━━━━━"
+MEAL_HEADERS_EN = (("breakfast", "☀️ BREAKFAST"), ("dinner", "🌙 DINNER"))
 
 
-# Целым словом/выражением: «adjust» не должно ловить «adjusting texture: up to 60 ml».
-VAGUE_RES = [(p, re.compile(rf"\b{re.escape(p)}\b", re.IGNORECASE)) for p in VAGUE_PHRASES]
-# Служебная строка под ⏱: «Time math: 5 + 2 x 9 + 3 x 4 = 35». Повару не уходит.
-TIME_MATH_LINE = re.compile(r"^\s*Time math:\s*(.*)$", re.IGNORECASE)
+def drop_unknown_dishes(menu):
+    """Winners whose dish_id is not in the catalog (for example a vote saved
+    before the switch to the fixed menu) are dropped. Returns (menu, dropped)."""
+    clean, dropped = {}, []
+    for meal, courses in menu.items():
+        clean[meal] = {}
+        for course, item in courses.items():
+            if item["dish_id"] in CATALOG:
+                clean[meal][course] = item
+            else:
+                dropped.append(f"{meal}/{course}: {item['dish_id']}")
+    return clean, dropped
 
 
-def check_cook_text(text):
-    """Возвращает (число блюд в тексте, найденные расплывчатые фразы)."""
-    return len(COOK_DISH_LINE.findall(text)), [p for p, rx in VAGUE_RES if rx.search(text)]
-
-
-def eval_time_math(expr):
-    """«5 + 2 x 9 + 3 x 4 = 35» -> (сумма, число после «=»); None, если
-    там что-то кроме цифр, +, x, ×, пробелов и одного «=»."""
-    if expr.count("=") != 1:
-        return None
-    left, right = expr.split("=")
-    if not re.fullmatch(r"[\d+x× ]+", left) or not re.fullmatch(r"\s*\d+\s*", right):
-        return None
-    total = 0
-    for term in left.split("+"):
-        factors = re.split(r"[x×]", term)
-        if not all(f.strip().isdigit() for f in factors):
-            return None
-        product = 1
-        for f in factors:
-            product *= int(f)
-        total += product
-    return total, int(right)
-
-
-def check_time_math(text):
-    """Блюда, у которых нет строки Time math или она не сходится сама с собой
-    либо с N из «⏱ N minutes». Возвращает строки проблем для повтора."""
-    dishes, cur = [], None
-    for line in text.splitlines():
-        if COOK_DISH_LINE.search(line):
-            cur = {"name": re.sub(r"^\W+", "", COOK_DISH_LINE.sub("", line)).strip(),
-                   "duration": None, "math": None}
-            dishes.append(cur)
-        elif cur is not None:
-            m = re.search(r"⏱\s*(\d+)\s*min", line)
-            if m and cur["duration"] is None:
-                cur["duration"] = int(m.group(1))
-            m = TIME_MATH_LINE.match(line)
-            if m and cur["math"] is None:
-                cur["math"] = m.group(1)
-    problems = []
-    for d in dishes:
-        if d["math"] is None:
-            problems.append(f"- Dish {d['name']}: there is no Time math line under the ⏱ line")
+def build_cook_pieces(menu, weekday):
+    """Deterministic cook message: every element is one whole block (intro,
+    section header with countdown, one dish, final check). No AI."""
+    pieces = [COOK_INTRO.format(weekday=weekday)]
+    if menu["breakfast"].get("main"):
+        dish_id = menu["breakfast"]["main"]["dish_id"]
+        kids = KIDS_BREAKFAST_COUNT + KIDS_BREAKFAST_BUFFER
+        pieces.append(f"{LINE}\n🌅 EARLY KIDS' BREAKFAST\n"
+                      f"Make this FIRST. Just this one dish.\n{LINE}")
+        pieces.append(render_dish(CATALOG[dish_id], kids))
+    for meal, header in MEAL_HEADERS_EN:
+        items = [(menu[meal][c]["dish_id"], menu[meal][c]["portions"])
+                 for c in MEAL_ORDER[meal] if c in menu[meal]]
+        if not items:
             continue
-        result = eval_time_math(d["math"])
-        if result is None or result[0] != result[1] or result[1] != d["duration"]:
-            problems.append(f"- Dish {d['name']}: the time math does not add up")
-    return problems
+        portions = items[0][1]
+        pieces.append(f"{LINE}\n{header} ({portions} portions)\n{LINE}\n\n"
+                      "⏰ COUNTDOWN (T = the family sits down)\n"
+                      + "\n".join(countdown_lines(items, CATALOG)))
+        for dish_id, p in items:
+            pieces.append(render_dish(CATALOG[dish_id], p))
+        pieces.append("✅ FINAL CHECK (before you call the family)\n"
+                      + "\n".join(f"• {CATALOG[d]['title']}" for d, _ in items)
+                      + "\n• Serving spoons next to every dish")
+    return [sanitize_plain(p) for p in pieces]
 
 
-def strip_time_math(text):
-    """Вырезает служебные строки «Time math: ...» перед отправкой повару."""
-    return "\n".join(ln for ln in text.splitlines() if not TIME_MATH_LINE.match(ln))
+def cooked_dishes(menu):
+    """Everything the cook makes, in cooking order: the early kids' breakfast
+    (the breakfast main for KIDS_BREAKFAST_COUNT + KIDS_BREAKFAST_BUFFER),
+    then breakfast, then dinner. [(dish_id, portions)]"""
+    items = []
+    if menu["breakfast"].get("main"):
+        items.append((menu["breakfast"]["main"]["dish_id"], KIDS_BREAKFAST_COUNT + KIDS_BREAKFAST_BUFFER))
+    for meal in ("breakfast", "dinner"):
+        for course in MEAL_ORDER[meal]:
+            item = menu[meal].get(course)
+            if item:
+                items.append((item["dish_id"], item["portions"]))
+    return items
 
 
-def check_cook_timing(text):
-    """Блюда, которые начинают меньше чем за длительность + 5 минут до подачи:
-    список (название, длительность N, старт M) по строкам «⏱ N minutes ...
-    Start at T minus M min» под заголовками блюд."""
-    late, dish = [], None
-    for line in text.splitlines():
-        if COOK_DISH_LINE.search(line):
-            dish = re.sub(r"^\W+", "", COOK_DISH_LINE.sub("", line)).strip()  # без эмодзи
-            continue
-        m = COOK_TIME_LINE.search(line)
-        if m and dish:
-            duration, start = int(m.group(1)), int(m.group(2))
-            if start < duration + 5:
-                late.append((dish, duration, start))
-    return late
-
-
-def describe_cook_problems(dish_count, expected_dishes, vague, late=(), bad_math=()):
-    """Перечень проблем черновика по-английски — для повторного запроса к ИИ."""
-    problems = list(bad_math)
-    for dish, duration, start in late:
-        problems.append(
-            f"- Dish {dish}: it takes {duration} minutes but starts only {start} "
-            f"minutes before serving, start at least {duration + 5} minutes before"
-        )
-    if dish_count != expected_dishes:
-        problems.append(
-            f"- The message has {dish_count} dishes (lines ending with \"— serves N\"), "
-            f"but the data has {expected_dishes}. Every dish must appear exactly once in "
-            "its section; a dish that is both in the early kids' breakfast and in the "
-            "regular breakfast is written out in full in both."
-        )
-    if vague:
-        problems.append(
-            "- Vague phrases found: " + ", ".join(f"\"{p}\"" for p in vague)
-            + ". Replace each one with an exact amount or a clear rule."
-        )
-    return "\n".join(problems)
+def plan_stock_usage(menu, inventory):
+    """Goes dish by dish through everything cooked (kids' breakfast included):
+    check_dish against what is left, then subtract_for_dish. Returns
+    (new inventory, shortfall) where shortfall is {stock_key: {"amount", "unit"}}
+    in the catalog's stock units."""
+    stock_before, _ = inventory_as_english_stock(inventory)
+    stock = dict(stock_before)
+    shortfall = {}
+    for dish_id, portions in cooked_dishes(menu):
+        dish = CATALOG[dish_id]
+        _, missing = check_dish(dish, portions, stock)
+        for key, need, have in missing:
+            entry = shortfall.setdefault(key, {"amount": 0.0, "unit": stock_unit_for(key)})
+            entry["amount"] = round(entry["amount"] + max(need - have, 0), 1)
+        stock = subtract_for_dish(dish, portions, stock)
+    return apply_stock_usage(inventory, stock_before, stock), shortfall
 
 
 async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
@@ -1749,15 +1236,26 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Пока никто не проголосовал — пропускаю сборку")
         return
 
-    menu = compute_daily_menu(responses)
+    menu, dropped = drop_unknown_dishes(compute_daily_menu(responses))
+    if dropped:
+        logger.warning(f"Победителей нет в каталоге, пропускаю: {dropped}")
+        try:
+            await context.bot.send_message(
+                chat_id=CREATOR_CHAT_ID,
+                text="В сборке повару пропущены блюда, которых нет в каталоге: " + ", ".join(dropped),
+            )
+        except Exception as e:
+            logger.error(f"Не удалось предупредить создателя: {e}")
     if not menu["breakfast"] and not menu["dinner"]:
         logger.info("Голосов нет — пропускаю сборку")
         return
 
+    # Семье — русские названия (title_ru): /rate, карточки оценки, история.
     served = []
     for meal in ("breakfast", "dinner"):
-        for course_data in menu[meal].values():
-            served.append({"name": DISHES[course_data["dish_id"]]["name"], "meal": meal})
+        for course in MEAL_ORDER[meal]:
+            if course in menu[meal]:
+                served.append({"name": CATALOG[menu[meal][course]["dish_id"]]["title_ru"], "meal": meal})
     # Сборка вечером собирает меню на завтра — /rate и карточки в 18:00
     # завтра будут читать именно этот ключ.
     tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -1771,79 +1269,6 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     recent.append({"date": today_str, "dishes": served_names})
     recent = recent[-RECENT_DISHES_DAYS:]  # храним только последние N дней
     save_json(RECENT_DISHES_FILE, recent)
-
-    def format_voters(voters):
-        labels = []
-        for v in voters:
-            extra = []
-            if v.get("egg"):
-                extra.append(f"яйцо: {v['egg']}")
-            if v.get("meat"):
-                extra.append(f"мясо: {v['meat']}")
-            labels.append(f"{v['name']} ({', '.join(extra)})" if extra else v["name"])
-        return ", ".join(labels)
-
-    def format_dish_block(dish_id, portions, voters):
-        dish = DISHES[dish_id]
-        scaled = ", ".join(
-            f"{ing['name']} {round(ing['amount_per_serving'] * portions, 1)} {ing['unit']}"
-            for ing in dish["ingredients"]
-        )
-        steps = " ".join(f"{i+1}) {s}" for i, s in enumerate(dish["recipe_steps"]))
-        voters_note = f" (голосовали: {format_voters(voters)})" if voters else ""
-        return (
-            f"{dish['name']} — на {portions} {plural_portions(portions)}"
-            f"{voters_note}. "
-            f"Ингредиенты: {scaled}. Приготовление: {steps} Подача: {dish['serving_note']}"
-        )
-
-    kids_section = ""
-    if menu["breakfast"].get("main"):
-        main_dish_id = menu["breakfast"]["main"]["dish_id"]
-        kids_portions = KIDS_BREAKFAST_COUNT + KIDS_BREAKFAST_BUFFER
-        kids_section = (
-            "## EARLY KIDS' BREAKFAST (prepare first, before the regular breakfast)\n\n"
-            + format_dish_block(main_dish_id, kids_portions, [])
-            + "\n\nServe this early, separately from the rest of the family's breakfast — "
-            "just this one dish, not the full spread."
-        )
-
-    sections = []
-    if kids_section:
-        sections.append(kids_section)
-    breakfast_labels = {
-        "main": "Основное", "meat": "Мясное блюдо",
-        "cold_starter": "Холодная закуска", "hot_starter": "Горячая закуска",
-        "side": "Гарнир", "soup": "Суп", "sauce": "Соус", "dessert": "Десерт",
-    }
-    if menu["breakfast"]:
-        lines = ["## Завтрак"]
-        for course in ("main", "meat", "cold_starter", "hot_starter", "side", "soup", "sauce", "dessert"):
-            if course in menu["breakfast"]:
-                item = menu["breakfast"][course]
-                lines.append(f"### {breakfast_labels[course]}")
-                lines.append(format_dish_block(item["dish_id"], item["portions"], item["voters"]))
-        sections.append("\n\n".join(lines))
-
-    dinner_labels = {
-        "starter": "Холодная закуска", "hot_starter": "Горячая закуска",
-        "soup": "Суп", "main": "Основное", "side": "Гарнир",
-        "sauce": "Соус", "dessert": "Десерт",
-    }
-    if menu["dinner"]:
-        lines = ["## Ужин"]
-        for course in ("starter", "hot_starter", "soup", "main", "side", "sauce", "dessert"):
-            if course in menu["dinner"]:
-                item = menu["dinner"][course]
-                lines.append(f"### {dinner_labels[course]}")
-                lines.append(format_dish_block(item["dish_id"], item["portions"], item["voters"]))
-        sections.append("\n\n".join(lines))
-
-    notes_lines = [f"{r['name']}: {r['notes']}" for r in responses.values() if r.get("notes")]
-    if notes_lines:
-        sections.append("Комментарии по людям:\n" + "\n".join(notes_lines))
-
-    plan_summary = "\n\n---\n\n".join(sections)
 
     # Повторная сборка за день (/forcecompile) не должна второй раз вычитать
     # запасы и дописывать недостачу — откатываемся к состоянию до первой.
@@ -1859,14 +1284,13 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
             "weekly_shortfall": load_json(WEEKLY_SHORTFALL_FILE, {}),
         })
 
-    needed = aggregate_ingredients_from_menu(menu)
-    shopping_list, updated_inventory = apply_inventory(needed)
+    updated_inventory, shortfall = plan_stock_usage(menu, load_inventory())
     save_inventory(updated_inventory)
     await check_low_stock_and_alert(context, updated_inventory)
 
-    if shopping_list:
+    if shortfall:
         weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
-        for name, item in shopping_list.items():
+        for name, item in shortfall.items():
             if name in weekly:
                 weekly[name]["amount"] = round(weekly[name]["amount"] + item["amount"], 1)
                 weekly[name]["unit"] = item["unit"]
@@ -1875,115 +1299,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         save_json(WEEKLY_SHORTFALL_FILE, weekly)
 
     weekday = WEEKDAYS_EN[(datetime.now(TIMEZONE) + timedelta(days=1)).weekday()]
-    intro_text = COOK_INTRO.format(weekday=weekday)
-
-    prompt = (
-        COOK_FORMAT_PROMPT.format(kitchen_facts=KITCHEN_FACTS)
-        + "\nВот меню на завтра по итогам голосования (ингредиенты уже "
-        "пересчитаны на указанное число порций, количества внутри шагов "
-        "даны на одну порцию):\n"
-        + plan_summary
-        + "\n\nNow write the message. Start with the first ━ line, no notes before it.\n"
-    )
-
-    def ask_cook_text(messages, attempt):
-        # Размышления выключены: с ними модель тратила на планирование ~33k
-        # токенов из лимита и обрывала текст повару на середине.
-        text_parts = []
-        with client.messages.stream(
-            model="claude-sonnet-5",
-            max_tokens=16000,
-            thinking={"type": "disabled"},
-            messages=messages,
-        ) as stream:
-            for chunk in stream.text_stream:
-                text_parts.append(chunk)
-            final_message = stream.get_final_message()
-        text = "".join(text_parts)
-        # Без размышлений модель иногда пишет черновые расчёты перед сообщением —
-        # сообщение всегда начинается с линии ━, всё до неё отрезаем.
-        if "━" in text and not text.lstrip().startswith("━"):
-            logger.warning(f"Отрезал {text.index('━')} символов заметок перед сообщением повару")
-            text = text[text.index("━"):]
-        logger.info(
-            f"Compile-сообщение повару ({attempt}): stop_reason={final_message.stop_reason}, "
-            f"output_tokens={final_message.usage.output_tokens}, "
-            f"длина={len(text)} символов"
-        )
-        return text, final_message.stop_reason
-
-    async def warn_creator(text):
-        try:
-            await context.bot.send_message(chat_id=CREATOR_CHAT_ID, text=text)
-        except Exception as e:
-            logger.error(f"Не удалось предупредить создателя: {e}")
-
-    async def cut_off(text, stop_reason):
-        """Оборванный или пустой текст повару не шлём — создатель перезапустит сборку."""
-        if stop_reason == "end_turn" and text.strip():
-            return False
-        reason = stop_reason if stop_reason != "end_turn" else "пустой ответ"
-        logger.error(f"Сообщение повару оборвалось ({reason}) — повару ничего не отправлено")
-        await warn_creator(
-            f"Сообщение повару оборвалось ({reason}), повару ничего не "
-            "отправлено. Запустите /forcecompile"
-        )
-        return True
-
-    # Столько блюд, сколько в plan_summary: завтрак + ужин (блюда на одного
-    # уже среди них) + отдельный блок школьников.
-    expected_dishes = len(menu["breakfast"]) + len(menu["dinner"]) + (1 if kids_section else 0)
-
-    first_request = [{"role": "user", "content": prompt}]
-    recipe_text, stop_reason = ask_cook_text(first_request, "черновик")
-    if await cut_off(recipe_text, stop_reason):
-        return
-
-    # Проверяем только текст ИИ — фиксированное вступление COOK_INTRO сюда не входит.
-    dish_count, vague = check_cook_text(recipe_text)
-    late = check_cook_timing(recipe_text)
-    bad_math = check_time_math(recipe_text)
-    if dish_count == expected_dishes and not vague and not late and not bad_math:
-        logger.info(f"Повтора не было: блюд {dish_count} из {expected_dishes}, "
-                    "расплывчатых фраз, поздних стартов и ошибок Time math нет")
-    else:
-        problems = describe_cook_problems(dish_count, expected_dishes, vague, late, bad_math)
-        logger.warning(f"Повторный запрос к ИИ, причины:\n{problems}")
-        recipe_text, stop_reason = ask_cook_text(first_request + [
-            {"role": "assistant", "content": recipe_text},
-            {"role": "user", "content": (
-                f"Your draft has these problems:\n{problems}\n\n"
-                "Write the COMPLETE message again with every problem fixed. "
-                "Same format, same ---SPLIT--- rules."
-            )},
-        ], "повтор")
-        if await cut_off(recipe_text, stop_reason):
-            return
-        dish_count, vague = check_cook_text(recipe_text)
-        late = check_cook_timing(recipe_text)
-        bad_math = check_time_math(recipe_text)
-        if dish_count != expected_dishes:
-            logger.error(f"После повтора блюд всё ещё {dish_count} из {expected_dishes} — повару ничего не отправлено")
-            await warn_creator(
-                f"В сообщении повару не хватает блюд (в ответе {dish_count} из "
-                f"{expected_dishes}). Повару ничего не отправлено. Запустите /forcecompile"
-            )
-            return
-        if vague:
-            logger.warning(f"После повтора остались расплывчатые фразы {vague} — отправляю как есть")
-        if late:
-            logger.warning(f"После повтора остались поздние старты {late} — отправляю как есть")
-        if bad_math:
-            logger.warning(f"После повтора Time math не сходится: {bad_math} — отправляю как есть")
-        if not vague and not late and not bad_math:
-            logger.info(f"После повтора всё сошлось: блюд {dish_count} из {expected_dishes}")
-
-    # ИИ ставит ---SPLIT--- между секциями и блюдами; режем только по ним,
-    # чтобы блюдо не обрывалось на середине. Без разделителей split_big
-    # порежет текст по пустым строкам.
-    body = strip_time_math(sanitize_plain(recipe_text))
-    pieces = [intro_text] + body.split("---SPLIT---")
-    messages = pack_messages(pieces)
+    messages = pack_messages(build_cook_pieces(menu, weekday))
     logger.info(f"Сообщение повару: {len(messages)} частей, длины: {[len(m) for m in messages]}")
     for m in messages:
         try:
@@ -2042,6 +1358,21 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
     save_json(WEEKLY_SHORTFALL_FILE, {})
 
 
+def menu_today_payload():
+    """Voting options for the mini app: every category's pool from the catalog,
+    Russian names for the family. generated_date stays so the mini app's
+    freshness check passes as before."""
+    result = {"breakfast": {}, "dinner": {},
+              "generated_date": datetime.now(TIMEZONE).strftime("%Y-%m-%d")}
+    for meal, courses in MEAL_ORDER.items():
+        for course in courses:
+            result[meal][course] = [
+                {"id": dish_id, "name": dish["title_ru"], "description": dish.get("description_ru", "")}
+                for dish_id, dish in pool(meal, course)
+            ]
+    return result
+
+
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/availability":
@@ -2052,21 +1383,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/menu-today":
-            result = {"breakfast": {}, "dinner": {}, "generated_date": DISHES_GENERATED_DATE}
-            for dish_id, dish in DISHES.items():
-                meal = dish.get("meal_type")
-                if meal not in result:
-                    continue
-                course = dish.get("course") or ("main" if meal == "breakfast" else None)
-                if not course:
-                    continue
-                result[meal].setdefault(course, []).append({
-                    "id": dish_id,
-                    "name": dish.get("name", ""),
-                    "description": dish.get("description", ""),
-                    "customize": dish.get("customize", []),
-                })
-            body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            body = json.dumps(menu_today_payload(), ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -2077,11 +1394,15 @@ class _HealthHandler(BaseHTTPRequestHandler):
             all_names = set(inventory.keys())
             units_by_name = {k: v.get("unit", "") for k, v in inventory.items()}
 
-            for dish in DISHES.values():
-                for ing in dish.get("ingredients", []):
-                    if ing["name"] not in all_names:
-                        all_names.add(ing["name"])
-                        units_by_name[ing["name"]] = ing["unit"]
+            # Catalog products not tracked yet (under a Russian or English key)
+            # get an empty row in the stock form, in the unit the catalog counts.
+            tracked = {inventory_stock_name(k) for k in inventory}
+            for dish in CATALOG.values():
+                for key, _, _, staple in scaled_ingredients(dish, 1):
+                    if staple or key in tracked or key in all_names:
+                        continue
+                    all_names.add(key)
+                    units_by_name[key] = stock_unit_for(key)
 
             RU_TO_EN_UNIT = {"г": "g", "мл": "ml", "шт": "pcs", "кг": "kg", "л": "l"}
             items = []
@@ -2149,18 +1470,6 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
-    job_queue.run_daily(
-        scheduled_menu_generation,
-        time=dtime(hour=GENERATE_HOUR, minute=GENERATE_MINUTE, tzinfo=TIMEZONE),
-    )
-    # Деплой/рестарт после времени генерации сбрасывает сегодняшнее меню —
-    # догоняем сразу, а не ждём завтрашнего запуска. До этого времени
-    # ничего не делаем: обычная ежедневная задача сработает сама.
-    now = datetime.now(TIMEZONE)
-    generate_time_today = now.replace(hour=GENERATE_HOUR, minute=GENERATE_MINUTE, second=0, microsecond=0)
-    if DISHES_GENERATED_DATE != now.strftime("%Y-%m-%d") and now >= generate_time_today:
-        logger.info("Меню на сегодня ещё не сгенерировано — запускаю генерацию при старте")
-        job_queue.run_once(scheduled_menu_generation, when=0)
     job_queue.run_daily(
         send_evening_reminders, time=dtime(hour=REMINDER_HOUR, minute=REMINDER_MINUTE, tzinfo=TIMEZONE)
     )

@@ -131,26 +131,19 @@
   const API_BASE_URL = 'https://family-meal-bot-er5p.onrender.com';
 
   // Порядок, подписи, обязательность и эмодзи для каждой категории.
-  // required относится только к "main" на завтрак и "main"/"side" на ужин —
-  // остальное необязательно.
+  // Обязательно только основное блюдо (завтрак и ужин), остальное необязательно.
   const CATEGORY_CONFIG = {
     breakfast: [
-      { key: 'main', label: 'Основное', required: true, emoji: '🍳' },
-      { key: 'meat', label: 'Мясное блюдо', required: true, emoji: '🍗' },
-      { key: 'cold_starter', label: 'Холодные закуски (завтрак)', required: false, emoji: '🥗' },
-      { key: 'hot_starter', label: 'Горячие закуски (завтрак)', required: false, emoji: '🥑' },
-      { key: 'side', label: 'Гарнир на завтрак', required: false, emoji: '🥔' },
-      { key: 'sauce', label: 'Соус (завтрак)', required: false, emoji: '🥣' },
-      { key: 'dessert', label: 'Десерт на завтрак', required: false, emoji: '🍎' },
+      { key: 'main', label: 'Основное блюдо', required: true, emoji: '🍳' },
+      { key: 'extra', label: 'Дополнение (лёгкое)', required: false, emoji: '🥚' },
+      { key: 'dessert', label: 'Десерт', required: false, emoji: '🍓' },
     ],
     dinner: [
-      { key: 'starter', label: 'Холодные закуски', required: false, emoji: '🥗' },
-      { key: 'hot_starter', label: 'Горячие закуски', required: false, emoji: '🥑' },
       { key: 'soup', label: 'Суп', required: false, emoji: '🍲' },
+      { key: 'salad', label: 'Салат', required: false, emoji: '🥗' },
       { key: 'main', label: 'Основное блюдо', required: true, emoji: '🍽' },
-      { key: 'side', label: 'Гарнир', required: true, emoji: '🥔' },
-      { key: 'sauce', label: 'Соус', required: false, emoji: '🥣' },
-      { key: 'dessert', label: 'Десерт', required: false, emoji: '🍎' },
+      { key: 'side', label: 'Гарнир', required: false, emoji: '🥦' },
+      { key: 'dessert', label: 'Десерт', required: false, emoji: '🍰' },
     ],
   };
 
