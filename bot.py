@@ -32,7 +32,7 @@ from telegram.error import BadRequest
 
 from catalog.scale_recipe import load_catalog, render_dish, countdown_lines, scaled_ingredients
 from catalog.stock_check import check_dish, subtract_for_dish, to_stock_unit, CONV
-from catalog.shopping_list import build_shopping_messages
+from catalog.shopping_list import build_shopping_messages, ITEMS as SHOPPING_ITEMS
 
 load_dotenv()
 
@@ -358,13 +358,22 @@ def headcount_summary(hc):
     return f"Завтрак {b}, ужин {d}, {tail}"
 
 
-def compute_unavailable_dishes():
-    """Список id блюд, на которые не хватает запасов на базовое число порций
-    блюда (base_portions). Продукта нет в запасах вообще — блюдо тоже
-    недоступно. Staple (соль, перец, масло, сухие специи, вода) не проверяются."""
-    stock, _ = inventory_as_english_stock()
-    return [dish_id for dish_id, dish in CATALOG.items()
-            if not check_dish(dish, dish["base_portions"], stock)[0]]
+def planned_portions(meal, hc):
+    """Portions a meal is planned for before the vote: people (default or
+    /people) + PORTION_BUFFER_EXTRA."""
+    return planned_people(meal, hc)[0] + PORTION_BUFFER_EXTRA
+
+
+def available_pool(meal, course, stock=None, hc=None):
+    """Dishes of a voting category we have enough stock for at the meal's
+    planned portions (breakfast desserts at breakfast portions, dinner
+    desserts at dinner portions). A product absent from stock makes the dish
+    unavailable; staples (salt, pepper, oil, dry spices, water) are not checked."""
+    stock = inventory_as_english_stock()[0] if stock is None else stock
+    hc = load_headcount() if hc is None else hc
+    portions = planned_portions(meal, hc)
+    return [(dish_id, dish) for dish_id, dish in pool(meal, course)
+            if check_dish(dish, portions, stock)[0]]
 
 
 def today_responses_file():
@@ -1150,7 +1159,8 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
 
     def valid_pick(meal, course, pick):
         """Only a catalog dish from this category's pool counts; doneness and
-        egg choices are not used in this version."""
+        egg choices are not used in this version. Stock is not checked here:
+        a dish that dropped out of /menu-today after the vote still counts."""
         if not pick or not isinstance(pick, dict):
             return None
         dish = CATALOG.get(pick.get("id"))
@@ -1231,11 +1241,13 @@ async def nudge_non_voters(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Не удалось отправить число едоков {chat_id}: {e}")
 
 
-def empty_main_meals(unavailable=None):
-    """Meals whose required category (main) has no dish we can cook from stock."""
-    unavailable = set(compute_unavailable_dishes() if unavailable is None else unavailable)
+def empty_main_meals(stock=None, hc=None):
+    """Meals whose required category (main) has no dish we can cook from stock
+    at the meal's planned portions — the same check as /menu-today."""
+    stock = inventory_as_english_stock()[0] if stock is None else stock
+    hc = load_headcount() if hc is None else hc
     return [meal for meal in ("breakfast", "dinner")
-            if all(dish_id in unavailable for dish_id, _ in pool(meal, "main"))]
+            if not available_pool(meal, "main", stock, hc)]
 
 
 async def alert_empty_main(context: ContextTypes.DEFAULT_TYPE):
@@ -1526,6 +1538,25 @@ def plan_stock_usage(menu, inventory):
     return apply_stock_usage(inventory, stock_before, stock), shortfall
 
 
+RU_STOCK_NAME = {en.lower(): ru for ru, en in INGREDIENT_EN.items()}
+STOCK_UNIT_RU = {"g": "г", "ml": "мл", "pcs": "шт"}
+
+
+def stock_name_ru(key):
+    if key in SHOPPING_ITEMS:
+        return SHOPPING_ITEMS[key][1]
+    return RU_STOCK_NAME.get(key, key)
+
+
+def shortfall_alert_text(shortfall):
+    """«Для выбранного меню не хватает: сметана — 150 мл; … Купите до готовки. /whatstobuy».
+    Items are split by «; »: some Russian names have commas inside."""
+    parts = [f"{stock_name_ru(key)} — {fmt_amount(item['amount'])} "
+             f"{STOCK_UNIT_RU.get(item['unit'], item['unit'])}"
+             for key, item in sorted(shortfall.items())]
+    return f"Для выбранного меню не хватает: {'; '.join(parts)}. Купите до готовки. /whatstobuy"
+
+
 def compile_snapshot_file():
     return DATA_DIR / f"before_compile_{datetime.now(TIMEZONE).date()}.json"
 
@@ -1630,6 +1661,14 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
             else:
                 weekly[name] = {"amount": item["amount"], "unit": item["unit"]}
         save_json(WEEKLY_SHORTFALL_FILE, weekly)
+        # Блюда по отдельности проходили проверку, а вместе (например, два
+        # блюда на один сыр) или с завтраком школьников запасов не хватает.
+        text = shortfall_alert_text(shortfall)
+        for chat_id in dict.fromkeys((CREATOR_CHAT_ID, FAMILY_HEAD_CHAT_ID)):
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=text)
+            except Exception as e:
+                logger.error(f"Не удалось отправить нехватку для меню {chat_id}: {e}")
 
     messages = cook_messages(menu)
     logger.info(f"Сообщение повару: {len(messages)} частей, длины: {[len(m) for m in messages]}")
@@ -1678,30 +1717,26 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
 
 
 def menu_today_payload():
-    """Voting options for the mini app: every category's pool from the catalog,
-    Russian names for the family. generated_date stays so the mini app's
-    freshness check passes as before."""
+    """Voting options for the mini app: only the dishes we have stock for at
+    the meal's planned portions (see available_pool), counted from the current
+    stock and /people on every request. Russian names for the family.
+    generated_date stays so the mini app's freshness check passes as before."""
+    stock, _ = inventory_as_english_stock()
+    hc = load_headcount()
     result = {"breakfast": {}, "dinner": {},
               "generated_date": datetime.now(TIMEZONE).strftime("%Y-%m-%d")}
     for meal, courses in MEAL_ORDER.items():
         for course in courses:
             result[meal][course] = [
                 {"id": dish_id, "name": dish["title_ru"], "description": dish.get("description_ru", "")}
-                for dish_id, dish in pool(meal, course)
+                for dish_id, dish in available_pool(meal, course, stock, hc)
             ]
     return result
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/availability":
-            body = json.dumps({"unavailable": compute_unavailable_dishes()}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-        elif self.path == "/menu-today":
+        if self.path == "/menu-today":
             body = json.dumps(menu_today_payload(), ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

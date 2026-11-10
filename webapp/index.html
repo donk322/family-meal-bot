@@ -76,7 +76,6 @@
     transition: border-color 0.15s ease, background 0.15s ease;
   }
   .dish-card.selected { border-color: var(--accent); background: var(--accent-soft); }
-  .dish-card.unavailable { opacity: 0.45; cursor: not-allowed; }
   .dish-emoji { font-size: 26px; line-height: 1; flex-shrink: 0; margin-top: 2px; }
   .dish-name { font-size: 14px; font-weight: 500; margin: 0 0 2px; }
   .dish-desc { font-size: 12px; color: var(--tg-theme-hint-color, #8a8a8a); margin: 0; }
@@ -160,7 +159,6 @@
 
   const selection = {}; // "breakfast.main" -> dishId, "dinner.side" -> dishId, etc.
   const donenessPrefs = {}; // dishId -> {egg?, meat?}
-  let unavailableIds = new Set();
   const relaxedRequired = new Set(); // "dinner.main" — обязательная, но сегодня пустая
 
   function buildPillRow(dishId, kind, options, panel) {
@@ -193,9 +191,9 @@
     section.appendChild(h2);
 
     const selKey = `${meal}.${cat.key}`;
-    // Обязательная категория, где ни одно блюдо сейчас не приготовить, не
-    // блокирует голосование: на сегодня она необязательная.
-    const noneAvailable = !dishes || dishes.length === 0 || dishes.every(d => unavailableIds.has(d.id));
+    // Сервер присылает только блюда, на которые хватает продуктов. Пустая
+    // обязательная категория не блокирует голосование: на сегодня она необязательная.
+    const noneAvailable = !dishes || dishes.length === 0;
     const required = cat.required && !noneAvailable;
     if (cat.required && noneAvailable) {
       relaxedRequired.add(selKey);
@@ -219,16 +217,14 @@
     } else {
       const cards = [];
       dishes.forEach(dish => {
-        const isUnavailable = unavailableIds.has(dish.id);
         const card = document.createElement('div');
-        card.className = 'dish-card' + (isUnavailable ? ' unavailable' : '');
+        card.className = 'dish-card';
         card.dataset.id = dish.id;
         card.innerHTML = `
           <div class="dish-emoji">${cat.emoji}</div>
           <div>
             <p class="dish-name">${dish.name}</p>
             <p class="dish-desc">${dish.description || ''}</p>
-            ${isUnavailable ? '<p class="unavailable-label">Нет нужных продуктов</p>' : ''}
           </div>
         `;
 
@@ -241,19 +237,17 @@
           if (dish.customize.includes('meat')) buildPillRow(dish.id, 'meat', MEAT_OPTIONS, panel);
         }
 
-        if (!isUnavailable) {
-          card.onclick = () => {
-            const already = selection[selKey] === dish.id;
-            cards.forEach(c => { c.card.classList.remove('selected'); if (c.panel) c.panel.style.display = 'none'; });
-            if (already) {
-              delete selection[selKey];
-            } else {
-              selection[selKey] = dish.id;
-              card.classList.add('selected');
-              if (panel) panel.style.display = 'block';
-            }
-          };
-        }
+        card.onclick = () => {
+          const already = selection[selKey] === dish.id;
+          cards.forEach(c => { c.card.classList.remove('selected'); if (c.panel) c.panel.style.display = 'none'; });
+          if (already) {
+            delete selection[selKey];
+          } else {
+            selection[selKey] = dish.id;
+            card.classList.add('selected');
+            if (panel) panel.style.display = 'block';
+          }
+        };
         listDiv.appendChild(card);
         if (panel) listDiv.appendChild(panel);
         cards.push({ card, panel });
@@ -275,14 +269,8 @@
 
   async function loadTodayMenu() {
     try {
-      const [menuRes, availRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/menu-today`),
-        fetch(`${API_BASE_URL}/availability`),
-      ]);
-      const menu = menuRes.ok ? await menuRes.json() : { breakfast: {}, dinner: {} };
-      const avail = availRes.ok ? await availRes.json() : { unavailable: [] };
-      unavailableIds = new Set(avail.unavailable || []);
-      return menu;
+      const menuRes = await fetch(`${API_BASE_URL}/menu-today`);
+      return menuRes.ok ? await menuRes.json() : { breakfast: {}, dinner: {} };
     } catch (e) {
       return { breakfast: {}, dinner: {} };
     }
