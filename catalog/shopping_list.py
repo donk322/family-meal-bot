@@ -1,37 +1,38 @@
 # -*- coding: utf-8 -*-
-"""Список покупок для магазина: что купить, сколько и для каких блюд.
-Детерминированно, без ИИ. build_shopping_messages(stock) -> список сообщений для Telegram (<= 3900 символов)."""
+"""Список покупок для магазина: что купить и сколько, на английском, по уровням
+срочности и разделам магазина. Детерминированно, без ИИ.
+build_shopping_messages(stock) -> список сообщений для Telegram (<= 3900 символов)."""
 import math
 try:
     from .scale_recipe import load_catalog, scaled_ingredients
-    from .stock_check import check_dish, stock_amount, to_stock_unit, CONV
+    from .stock_check import stock_amount, to_stock_unit, CONV
 except ImportError:
     from scale_recipe import load_catalog, scaled_ingredients
-    from stock_check import check_dish, stock_amount, to_stock_unit, CONV
+    from stock_check import stock_amount, to_stock_unit, CONV
 
 # key: (en, ru, раздел, уровень, целевой запас, фасовка, единица, (ярлык, размер одной упаковки) или None)
-# Уровень 1 = основа (нужна многим блюдам). Уровень 2 = только для отдельных блюд.
+# Уровень 0 = срочно (основа почти всех блюд), 1 = тоже нужно (основа), 2 = только для отдельных блюд.
 # Целевой запас: до какого количества докупаем (None = ровно столько, сколько не хватает для блюда).
 ITEMS = {
  "chicken breast":  ("Chicken breast", "куриная грудка", "meat", 1, 2000, 500, "g", None),
  "chicken thigh":   ("Chicken thighs (bone-in, skin-on)", "куриные бёдра с костью и кожей", "meat", 1, 1400, 250, "g", None),
- "bacon":           ("Bacon", "бекон", "meat", 1, 900, 50, "g", None),
- "hard cheese":     ("Cheddar, yellow block (NOT parmesan)", "чеддер, жёлтый кусок (не пармезан)", "dairy", 1, 1000, 250, "g", None),
+ "bacon":           ("Bacon", "бекон", "meat", 0, 900, 50, "g", None),
+ "hard cheese":     ("Cheddar, yellow block (NOT parmesan)", "чеддер, жёлтый кусок (не пармезан)", "dairy", 0, 1000, 250, "g", None),
  "parmesan":        ("Parmesan", "пармезан", "dairy", 1, 400, 50, "g", None),
  "mozzarella":      ("Mozzarella", "моцарелла", "dairy", 1, 400, 100, "g", None),
- "sour cream":      ("Sour cream", "сметана", "dairy", 1, 1000, 250, "ml", None),
- "cream":           ("Cream", "сливки", "dairy", 1, 1000, 250, "ml", None),
+ "sour cream":      ("Sour cream", "сметана", "dairy", 0, 1000, 250, "ml", None),
+ "cream":           ("Cream", "сливки", "dairy", 0, 1000, 250, "ml", None),
  "butter":          ("Butter", "сливочное масло", "dairy", 1, 600, 250, "g", None),
  "cream cheese":    ("Cream cheese", "крем-сыр", "dairy", 1, 500, 250, "g", None),
  "feta":            ("Feta", "фета", "dairy", 1, 250, 100, "g", None),
  "cabbage":         ("White cabbage", "белокочанная капуста", "veg", 1, 3000, 1500, "g", ("head", 1500)),
  "avocado":         ("Avocados", "авокадо", "veg", 1, 1000, 250, "g", None),
- "garlic":          ("Garlic", "чеснок", "veg", 1, 120, 40, "g", ("head", 40)),
+ "garlic":          ("Garlic", "чеснок", "veg", 0, 120, 40, "g", ("head", 40)),
  "zucchini":        ("Zucchini", "цукини", "veg", 1, 1000, 250, "g", None),
  "spinach":         ("Baby spinach", "шпинат", "veg", 1, 250, 125, "g", None),
  "romaine lettuce": ("Romaine lettuce", "салат романо", "veg", 1, 900, 300, "g", ("head", 300)),
  "shirataki noodles": ("Shirataki noodles", "лапша ширатаки", "pantry", 1, 1400, 200, "g", ("pack", 200)),
- "mushroom stock cubes":   ("Mushroom stock cubes", "грибные бульонные кубики", "pantry", 1, 6, 6, "pcs", ("box", 6)),
+ "mushroom stock cubes":   ("Mushroom stock cubes", "грибные бульонные кубики", "pantry", 0, 6, 6, "pcs", ("box", 6)),
  "vegetable stock cubes":  ("Vegetable stock cubes", "овощные бульонные кубики", "pantry", 1, 6, 6, "pcs", ("box", 6)),
  "chicken stock cubes":    ("Chicken stock cubes", "куриные бульонные кубики", "pantry", 1, 3, 6, "pcs", ("box", 6)),
  "pickled cucumbers": ("Pickled cucumbers", "солёные огурцы", "pantry", 1, 400, 350, "g", ("jar", 350)),
@@ -64,7 +65,8 @@ ITEMS = {
  "cardamom pods":   ("Cardamom pods", "кардамон в коробочках", "pantry", 2, None, 5, "pcs", None),
  "fish sauce":      ("Fish sauce (gluten-free)", "рыбный соус без глютена", "pantry", 2, None, 250, "ml", ("bottle", 250)),
 }
-SECTIONS = [("meat", "🥩 МЯСО И РЫБА"), ("dairy", "🥛 МОЛОЧНОЕ"), ("veg", "🥬 ОВОЩИ И ЗЕЛЕНЬ"), ("pantry", "🫙 БАКАЛЕЯ")]
+SECTIONS = [("meat", "🥩 MEAT & FISH"), ("dairy", "🥛 DAIRY"), ("veg", "🥬 VEGETABLES"), ("pantry", "🫙 PANTRY")]
+TIERS = [(0, "🔴 URGENT — BUY TODAY"), (1, "🟠 ALSO NEEDED"), (2, "⚪ OPTIONAL")]
 
 def _stock_unit(key, catalog):
     """Единица, в которой склад считает продукт (после CONV): g, ml или pcs.
@@ -85,7 +87,8 @@ def _fmt(amount, unit, label):
         name, size = label
         n = int(math.ceil(amount / float(size) - 1e-9))
         plural = "es" if name == "bunch" else "s"
-        extra = f" (about {int(size)} {unit} each)" if unit in ("g", "ml") and size > 1 and name in ("head", "pack", "jar", "bottle") and unit != "pcs" else ""
+        each = " each" if n > 1 else ""
+        extra = f" (about {int(size)} {unit}{each})" if unit in ("g", "ml") and size > 1 and name in ("head", "pack", "jar", "bottle") and unit != "pcs" else ""
         return f"{n} {name}{plural if n > 1 else ''}{extra}"
     if unit == "g":
         return f"{amount/1000:g} kg" if amount >= 1000 else f"{int(amount)} g"
@@ -121,19 +124,6 @@ def compute_purchases(stock, catalog=None):
                     "unit": unit, "label": label, "dishes": dishes_short.get(key, [])})
     return out
 
-def _count_available(stock, catalog):
-    return sum(1 for d in catalog.values() if check_dish(d, d["base_portions"], stock)[0])
-
-def _apply(stock, purchases):
-    new = {k: (dict(v) if isinstance(v, dict) else v) for k, v in stock.items()}
-    for p in purchases:
-        cur = new.get(p["key"])
-        cur = (cur["amount"] if isinstance(cur, dict) else cur) or 0
-        add = p["amount"]
-        if isinstance(new.get(p["key"]), dict): new[p["key"]]["amount"] = cur + add
-        else: new[p["key"]] = cur + add
-    return new
-
 def _pack_messages(blocks, limit=3800):
     msgs, cur = [], ""
     for b in blocks:
@@ -145,44 +135,30 @@ def _pack_messages(blocks, limit=3800):
     return msgs
 
 def build_shopping_messages(stock, catalog=None):
+    """Для покупателя: только что купить и сколько, на английском. Три уровня
+    (срочно / тоже нужно / по желанию), внутри — разделы магазина, в конце —
+    строки /addstock с рекомендованными количествами."""
     cat = catalog or load_catalog()
     purchases = compute_purchases(stock, cat)
-    now_ok = _count_available(stock, cat)
-    t1 = [p for p in purchases if p["tier"] == 1]
-    t2 = [p for p in purchases if p["tier"] == 2]
-    after1 = _count_available(_apply(stock, t1), cat)
-    after_all = _count_available(_apply(stock, purchases), cat)
     if not purchases:
-        return [f"🛒 SHOPPING LIST\nEverything for the menu is in stock. {now_ok} of {len(cat)} dishes can be cooked."]
-    def section_blocks(items, with_dishes):
-        blocks = []
+        return ["🛒 SHOPPING LIST\nEverything for the menu is in stock. Nothing to buy."]
+    blocks = ["🛒 SHOPPING LIST"]
+    for tier, tier_title in TIERS:
+        items = [p for p in purchases if p["tier"] == tier]
+        if not items:
+            continue
+        blocks.append("\n" + tier_title)
         for sec, title in SECTIONS:
             rows = [p for p in items if p["section"] == sec]
-            if not rows: continue
+            if not rows:
+                continue
             blocks.append("\n" + title)
-            for p in sorted(rows, key=lambda r: -len(r["dishes"])):
-                name = p["en"] + (f" / {p['ru']}" if p["ru"] else "")
-                blocks.append(f"☐ {name} — {_fmt(p['amount'], p['unit'], p['label'])}")
-                if with_dishes and p["dishes"]:
-                    ex = ", ".join(p["dishes"][:3])
-                    n = len(p["dishes"])
-                    blocks.append(f"   (нужен для {n} блюд: {ex}{'...' if n > 3 else ''})" if n > 1 else f"   ({ex})")
-        return blocks
-    msgs = []
-    head = (f"🛒 SHOPPING LIST / СПИСОК ПОКУПОК\nСейчас можно готовить {now_ok} из {len(cat)} блюд. "
-            f"После покупок из части 1 будет {after1}, из частей 1 и 2 будет {after_all}.")
-    if t1:
-        msgs += _pack_messages([head + "\n\nЧАСТЬ 1: ОСНОВА (покупать в первую очередь)"] + section_blocks(t1, True))
-    if t2:
-        msgs += _pack_messages(["🛒 ЧАСТЬ 2: ТОЛЬКО ЕСЛИ ХОТИТЕ ЭТИ БЛЮДА (каждый продукт нужен 1-2 блюдам)"] + section_blocks(t2, True))
+            for p in sorted(rows, key=lambda r: (-len(r["dishes"]), r["en"])):
+                blocks.append(f"☐ {p['en']} — {_fmt(p['amount'], p['unit'], p['label'])}")
+    msgs = _pack_messages(blocks)
     # блок /addstock с рекомендованными количествами
-    lines = []
-    for p in sorted(purchases, key=lambda r: (r["tier"], r["key"])):
-        u = {"g": "g", "ml": "ml", "pcs": "pcs"}[p["unit"]]
-        amount = p["amount"]
-        if p["label"] and p["unit"] == "g" and p["key"] != "cabbage":
-            pass
-        lines.append(f"/addstock {p['key']} {amount} {u}")
+    lines = [f"/addstock {p['key']} {p['amount']} {p['unit']}"
+             for p in sorted(purchases, key=lambda r: (r["tier"], r["key"]))]
     note = ("➕ AFTER SHOPPING: copy the lines below, DELETE the lines for things you did NOT buy "
             "(or change the amount), and send them to the bot. The amounts are the recommended ones.")
     chunks = [lines[i:i + 25] for i in range(0, len(lines), 25)]
