@@ -161,6 +161,7 @@
   const selection = {}; // "breakfast.main" -> dishId, "dinner.side" -> dishId, etc.
   const donenessPrefs = {}; // dishId -> {egg?, meat?}
   let unavailableIds = new Set();
+  const relaxedRequired = new Set(); // "dinner.main" — обязательная, но сегодня пустая
 
   function buildPillRow(dishId, kind, options, panel) {
     const label = document.createElement('p');
@@ -190,14 +191,24 @@
     const h2 = document.createElement('h2');
     h2.textContent = cat.label;
     section.appendChild(h2);
-    if (!cat.required) {
+
+    const selKey = `${meal}.${cat.key}`;
+    // Обязательная категория, где ни одно блюдо сейчас не приготовить, не
+    // блокирует голосование: на сегодня она необязательная.
+    const noneAvailable = !dishes || dishes.length === 0 || dishes.every(d => unavailableIds.has(d.id));
+    const required = cat.required && !noneAvailable;
+    if (cat.required && noneAvailable) {
+      relaxedRequired.add(selKey);
+      const note = document.createElement('p');
+      note.className = 'unavailable-label';
+      note.textContent = 'Нет доступных блюд: докупите продукты';
+      section.appendChild(note);
+    } else if (!cat.required) {
       const tag = document.createElement('p');
       tag.className = 'optional-tag';
       tag.textContent = 'Необязательно';
       section.appendChild(tag);
     }
-
-    const selKey = `${meal}.${cat.key}`;
     const listDiv = document.createElement('div');
 
     if (!dishes || dishes.length === 0) {
@@ -251,7 +262,7 @@
 
     section.appendChild(listDiv);
 
-    if (cat.required) {
+    if (required) {
       const err = document.createElement('p');
       err.className = 'error';
       err.id = `err_${meal}_${cat.key}`;
@@ -307,7 +318,7 @@
     let ok = true;
     for (const meal of ['breakfast', 'dinner']) {
       for (const cat of CATEGORY_CONFIG[meal]) {
-        if (!cat.required) continue;
+        if (!cat.required || relaxedRequired.has(`${meal}.${cat.key}`)) continue;
         const err = document.getElementById(`err_${meal}_${cat.key}`);
         if (!selection[`${meal}.${cat.key}`]) {
           if (err) err.style.display = 'block';

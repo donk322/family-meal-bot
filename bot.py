@@ -58,6 +58,10 @@ TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Africa/Johannesburg"))
 NUDGE_HOUR = int(os.environ.get("NUDGE_HOUR", "18"))
 NUDGE_MINUTE = int(os.environ.get("NUDGE_MINUTE", "0"))
 
+# Daily check: is there at least one main dish we can cook for breakfast and dinner?
+EMPTY_MAIN_ALERT_HOUR = int(os.environ.get("EMPTY_MAIN_ALERT_HOUR", "16"))
+EMPTY_MAIN_ALERT_MINUTE = int(os.environ.get("EMPTY_MAIN_ALERT_MINUTE", "30"))
+
 # Weekly shopping list — 0=Monday ... 6=Sunday
 WEEKLY_SHOPPING_DAY = int(os.environ.get("WEEKLY_SHOPPING_DAY", "6"))
 WEEKLY_SHOPPING_HOUR = int(os.environ.get("WEEKLY_SHOPPING_HOUR", "21"))
@@ -1227,6 +1231,27 @@ async def nudge_non_voters(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Не удалось отправить число едоков {chat_id}: {e}")
 
 
+def empty_main_meals(unavailable=None):
+    """Meals whose required category (main) has no dish we can cook from stock."""
+    unavailable = set(compute_unavailable_dishes() if unavailable is None else unavailable)
+    return [meal for meal in ("breakfast", "dinner")
+            if all(dish_id in unavailable for dish_id, _ in pool(meal, "main"))]
+
+
+async def alert_empty_main(context: ContextTypes.DEFAULT_TYPE):
+    """16:30: one line to the creator and the family head if a main category is empty."""
+    meals = empty_main_meals()
+    if not meals:
+        return
+    text = (f"Нет доступных основных блюд на {' и '.join(MEAL_RU_ACC[m] for m in meals)}. "
+            "Список покупок: /whatstobuy")
+    for chat_id in dict.fromkeys((CREATOR_CHAT_ID, FAMILY_HEAD_CHAT_ID)):
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as e:
+            logger.warning(f"Не удалось отправить предупреждение о пустом основном блюде {chat_id}: {e}")
+
+
 def headcount_notice(hc):
     """«Завтра: завтрак 5 чел., ужин 7 чел. Изменить: /people», with
     «осталось N дн.» while a /people override is on."""
@@ -1419,6 +1444,14 @@ def drop_unknown_dishes(menu):
     return clean, dropped
 
 
+NO_MAIN_TEXT = "No main dish selected"
+MEAL_RU_ACC = {"breakfast": "завтрак", "dinner": "ужин"}
+
+
+def meals_without_main(menu):
+    return [meal for meal in ("breakfast", "dinner") if "main" not in menu[meal]]
+
+
 def build_cook_pieces(menu, weekday):
     """Deterministic cook message: every element is one whole block (intro,
     section header with countdown, one dish, final check). No AI."""
@@ -1432,14 +1465,17 @@ def build_cook_pieces(menu, weekday):
     for meal, header in MEAL_HEADERS_EN:
         items = [(menu[meal][c]["dish_id"], menu[meal][c]["portions"])
                  for c in MEAL_ORDER[meal] if c in menu[meal]]
+        no_main = "" if "main" in menu[meal] else f"⚠️ {NO_MAIN_TEXT}\n\n"
         if not items:
+            # Nothing at all was chosen for this meal: say so instead of skipping it.
+            pieces.append(f"{LINE}\n{header}\n{LINE}\n\n⚠️ {NO_MAIN_TEXT}")
             continue
         first = next(menu[meal][c] for c in MEAL_ORDER[meal] if c in menu[meal])
         portions = first["portions"]
         people = first.get("people", portions - PORTION_BUFFER_EXTRA)
         guests = " (guests)" if first.get("guests") else ""
         pieces.append(f"{LINE}\n{header} ({people} people + {portions - people} extra = "
-                      f"{portions} portions){guests}\n{LINE}\n\n"
+                      f"{portions} portions){guests}\n{LINE}\n\n" + no_main +
                       "⏰ COUNTDOWN (T = the family sits down)\n"
                       + "\n".join(countdown_lines(items, CATALOG)))
         for dish_id, p in items:
@@ -1534,6 +1570,19 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     if not menu["breakfast"] and not menu["dinner"]:
         logger.info("Голосов нет — пропускаю сборку")
         return
+
+    no_main = meals_without_main(menu)
+    if no_main:
+        meals_ru = " и ".join(MEAL_RU_ACC[m] for m in no_main)
+        logger.warning(f"В сборке нет основного блюда: {no_main}")
+        try:
+            await context.bot.send_message(
+                chat_id=CREATOR_CHAT_ID,
+                text=f"В сборке повару нет основного блюда на {meals_ru}: повару написано "
+                     f"«{NO_MAIN_TEXT}». Список покупок: /whatstobuy",
+            )
+        except Exception as e:
+            logger.error(f"Не удалось предупредить создателя: {e}")
 
     # Семье — русские названия (title_ru): /rate, карточки оценки, история.
     served = []
@@ -1749,6 +1798,10 @@ def main():
     job_queue.run_daily(
         nudge_non_voters,
         time=dtime(hour=NUDGE_HOUR, minute=NUDGE_MINUTE, tzinfo=TIMEZONE),
+    )
+    job_queue.run_daily(
+        alert_empty_main,
+        time=dtime(hour=EMPTY_MAIN_ALERT_HOUR, minute=EMPTY_MAIN_ALERT_MINUTE, tzinfo=TIMEZONE),
     )
     job_queue.run_daily(
         send_rating_cards,
