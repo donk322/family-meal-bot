@@ -1,10 +1,8 @@
 import os
 import asyncio
-import html
 import json
 import logging
 import threading
-import zlib
 from collections import Counter
 from datetime import time as dtime, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -49,7 +47,6 @@ REMINDER_MINUTE = int(os.environ.get("REMINDER_MINUTE", "0"))
 FAMILY_HEAD_USERNAME = os.environ.get("FAMILY_HEAD_USERNAME", "").lstrip("@").lower()
 CREATOR_CHAT_ID = 813950397
 FAMILY_HEAD_CHAT_ID = 713575142
-VLADA_CHAT_ID = 101205843  # пока только для опознания, персональный трек — позже
 FAMILY_HEAD_VOTE_WEIGHT = int(os.environ.get("FAMILY_HEAD_VOTE_WEIGHT", "2"))
 COMPILE_HOUR = int(os.environ.get("COMPILE_HOUR", "21"))
 COMPILE_MINUTE = int(os.environ.get("COMPILE_MINUTE", "30"))
@@ -92,14 +89,7 @@ DATA_DIR.mkdir(exist_ok=True)
 
 FAMILY_FILE = DATA_DIR / "family.json"
 INVENTORY_FILE = DATA_DIR / "inventory.json"
-WEEKLY_SHORTFALL_FILE = DATA_DIR / "weekly_shortfall.json"
-FOOD_PREFERENCES_FILE = DATA_DIR / "food_preferences.json"
-SERVED_BY_DATE_FILE = DATA_DIR / "served_by_date.json"  # {"YYYY-MM-DD": [{"name", "meal"}, ...]}
-SERVED_KEEP_DAYS = 7
-RECENT_DISHES_FILE = DATA_DIR / "recent_dishes.json"
-RATED_TODAY_FILE = DATA_DIR / "rated_today.json"  # {"date": "YYYY-MM-DD", "users": ["123", ...]}
 HEADCOUNT_FILE = DATA_DIR / "headcount.json"  # {"breakfast": null|int, "dinner": null|int}, null = как обычно
-RECENT_DISHES_DAYS = int(os.environ.get("RECENT_DISHES_DAYS", "5"))
 
 
 # Фиксированное меню: 56 блюд из catalog/dishes_fixed.json (собраны из
@@ -110,10 +100,6 @@ CATALOG = load_catalog()
 MEAL_ORDER = {
     "breakfast": ("main", "extra", "dessert"),
     "dinner": ("soup", "salad", "main", "side", "dessert"),
-}
-COURSE_LABELS_EN = {
-    "breakfast": {"main": "Main", "extra": "Extra", "dessert": "Dessert"},
-    "dinner": {"soup": "Soup", "salad": "Salad", "main": "Main", "side": "Side", "dessert": "Dessert"},
 }
 
 
@@ -414,13 +400,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Меню фиксированное: блюда из нашего списка, выбираете по одному в "
         "каждой категории (завтрак: Основное блюдо, Дополнение, Десерт; "
         "ужин: Суп, Салат, Основное блюдо, Гарнир, Десерт). Обязательно "
-        "только основное блюдо, остальное по желанию. Блюда, для которых "
-        "сейчас нет продуктов, показаны серыми.\n\n"
+        "только основное блюдо, остальное по желанию. Показаны только "
+        "блюда, на которые сейчас хватает продуктов.\n\n"
         f"Если кто-то забудет проголосовать — в {NUDGE_HOUR:02d}:{NUDGE_MINUTE:02d} придёт ещё одно "
         "личное напоминание, но только тем, кто ещё не проголосовал.\n\n"
-        "После еды можно написать боту /rate — придут кнопки по каждому "
-        "сегодняшнему блюду: понравилось или нет, и хватило ли порции. Так "
-        "видно, какие блюда семье нравятся.\n\n"
         "Можешь нажать кнопку голосования и сейчас, чтобы попробовать."
     )
 
@@ -553,11 +536,6 @@ async def people_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise
 
 
-async def regenmenu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Раньше перезапускала генерацию меню ИИ. Меню теперь фиксированное."""
-    await update.message.reply_text("Меню теперь фиксированное, генерация не нужна.")
-
-
 async def forcecompile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Собрать и отправить план повару прямо сейчас, не дожидаясь
     COMPILE_HOUR:COMPILE_MINUTE — например, если плановая сборка прошла
@@ -581,7 +559,7 @@ async def forcecompile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def previewcook_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the caller the cook's messages for the current votes, built by the
     same code as compile_and_send_to_cook. Nothing is written: no stock
-    subtraction, no served_by_date, no history, nothing goes to the cook."""
+    subtraction, nothing goes to the cook."""
     if not await check_admin(update, "previewcook"):
         return
     responses = load_today_responses()
@@ -788,30 +766,14 @@ def fmt_amount(x):
 
 
 async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shopping list (catalog/shopping_list.py), sent only to whoever asked."""
+    """Shopping list (catalog/shopping_list.py), sent only to whoever asked.
+    /shoppinglist is the same command."""
     if not await check_stock_access(update, "whatstobuy"):
         return
     stock, _ = inventory_as_english_stock()
     for msg in build_shopping_messages(stock, CATALOG):
         await update.message.reply_text(msg)
         await asyncio.sleep(0.5)
-
-
-async def shoppinglist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
-    if not weekly:
-        await update.message.reply_text(
-            "This week's shopping list is empty so far — nothing needed to buy yet."
-        )
-        return
-
-    lines = [
-        f"- {to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}"
-        for name, item in sorted(weekly.items())
-    ]
-    await update.message.reply_text(
-        "This week's shopping list so far:\n" + "\n".join(lines)
-    )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -821,8 +783,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Around {REMINDER_HOUR:02d}:{REMINDER_MINUTE:02d} the family gets a "
         "message to vote for tomorrow, one dish per category (breakfast: "
         "Main, Extra, Dessert; dinner: Soup, Salad, Main, Side, Dessert). "
-        "Only the Main is required. Dishes we don't have the products for "
-        "are greyed out. Anyone who hasn't voted yet gets one more reminder "
+        "Only the Main is required. Only dishes we have the products for "
+        "are shown. Anyone who hasn't voted yet gets one more reminder "
         f"around {NUDGE_HOUR:02d}:{NUDGE_MINUTE:02d}. Around "
         f"{COMPILE_HOUR:02d}:{COMPILE_MINUTE:02d}, you get this chat's "
         "message: the winning dishes, scaled to the right number of "
@@ -852,15 +814,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "the name.\n"
         "/removestock <name> — remove a product entirely, in case "
         "something got added by mistake\n"
-        "/whatstobuy — shopping list: what to buy, how much, and for which "
-        "dishes, grouped by store section. It ends with ready /addstock "
-        "lines to send after shopping. The same list also arrives "
+        "/whatstobuy (or /shoppinglist) — shopping list: what to buy and "
+        "how much, by urgency and store section. It ends with ready "
+        "/addstock lines to send after shopping. The same list also arrives "
         f"automatically every {WEEKDAYS_EN[WEEKLY_SHOPPING_DAY % 7].capitalize()} at "
         f"{WEEKLY_SHOPPING_HOUR:02d}:{WEEKLY_SHOPPING_MINUTE:02d}\n"
-        "/shoppinglist — what ran short in this week's cooking so far\n"
-        "/rate — rate today's dishes (👍/👎 for taste, and whether the "
-        "portion size was right) — this shows which dishes the family "
-        "likes\n"
         "/previewcook — family head only: see tomorrow's cooking messages "
         "for the current votes, sent only to you. Nothing goes to the cook "
         "and stock is not changed\n"
@@ -872,262 +830,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — show this message again"
     )
     await update.message.reply_text(text)
-
-
-def served_tag(served):
-    """Короткий отпечаток списка блюд — Telegram ограничивает callback_data
-    64 байтами, а русское название блюда в UTF-8 легко их превышает, поэтому
-    в кнопку кладём отпечаток списка + индекс блюда, а не само название."""
-    return f"{zlib.crc32('|'.join(served).encode('utf-8')):08x}"
-
-
-def normalize_served(entries):
-    """Список блюд раньше хранился как список названий, теперь — как список
-    {"name", "meal"}. Принимает оба формата, для старых строк meal = None."""
-    result = []
-    for entry in entries or []:
-        if isinstance(entry, str):
-            result.append({"name": entry, "meal": None})
-        elif isinstance(entry, dict) and entry.get("name"):
-            result.append({"name": entry["name"], "meal": entry.get("meal")})
-    return result
-
-
-def load_served(date):
-    """Блюда, которые готовятся на дату date ("YYYY-MM-DD")."""
-    return normalize_served(load_json(SERVED_BY_DATE_FILE, {}).get(date, []))
-
-
-def save_served(date, served):
-    by_date = load_json(SERVED_BY_DATE_FILE, {})
-    by_date[date] = served
-    keep = sorted(by_date)[-SERVED_KEEP_DAYS:]
-    save_json(SERVED_BY_DATE_FILE, {d: by_date[d] for d in keep})
-
-
-def served_names_tag(served):
-    """Отпечаток считается только по названиям — так он совпадает для старого
-    и нового формата списка блюд, и старые кнопки продолжают работать."""
-    return served_tag([entry["name"] for entry in served])
-
-
-def resolve_rated_dish(ref):
-    """По "tag|index" из кнопки находит название блюда — в списках блюд по
-    датам или в истории последних дней (карточку могли нажать через
-    несколько дней). None — если не нашли."""
-    parts = ref.split("|")
-    if len(parts) != 2 or not parts[1].isdigit():
-        return ref  # старая кнопка с названием блюда прямо в callback_data
-    tag, idx = parts[0], int(parts[1])
-    by_date = load_json(SERVED_BY_DATE_FILE, {})
-    candidates = [normalize_served(by_date[d]) for d in sorted(by_date, reverse=True)]
-    candidates += [normalize_served(entry.get("dishes", []))
-                   for entry in reversed(load_json(RECENT_DISHES_FILE, []))]
-    for served in candidates:
-        if served and served_names_tag(served) == tag and idx < len(served):
-            return served[idx]["name"]
-    return None
-
-
-def record_rating(dish_name, key):
-    """key — up / down / portion_little / portion_right / portion_much."""
-    prefs = load_json(FOOD_PREFERENCES_FILE, {"dislikes": ["яблоко"], "ratings": {}})
-    ratings = prefs.setdefault("ratings", {})
-    entry = ratings.setdefault(dish_name, {"up": 0, "down": 0})
-    entry[key] = entry.get(key, 0) + 1
-    save_json(FOOD_PREFERENCES_FILE, prefs)
-
-
-def load_rated(date):
-    """Кто уже прошёл оценку блюд за date — чтобы повторный /rate не задвоил голоса."""
-    data = load_json(RATED_TODAY_FILE, {})
-    if data.get("date") != date:
-        return set()
-    return set(data.get("users", []))
-
-
-def mark_rated(user_id, date):
-    users = load_rated(date)
-    users.add(str(user_id))
-    save_json(RATED_TODAY_FILE, {"date": date, "users": sorted(users)})
-
-
-MEAL_HEADERS = {"breakfast": "🍳 Завтрак", "dinner": "🍽 Ужин"}
-RATE_INTRO = "Как вам сегодняшняя еда? Оцените блюда, это займёт минуту."
-RATE_DONE_TEXT = "✅ <b>Готово!</b> Спасибо, так меню станет вкуснее с каждым днём."
-RATE_STALE_TEXT = "Эта карточка устарела. Напишите /rate."
-RATE_ALREADY_TEXT = "Вы уже оценили сегодняшние блюда, спасибо! 🙌"
-
-
-def build_taste_card(served, i, intro=None):
-    """Шаг 1 для блюда i: текст карточки (HTML) и кнопки вкуса."""
-    dish = served[i]
-    counter = f"блюдо {i + 1} из {len(served)}"
-    header = MEAL_HEADERS.get(dish["meal"])
-    lines = []
-    if intro:
-        lines += [intro, ""]
-    lines += [
-        f"<b>{header}</b> · {counter}" if header else counter.capitalize(),
-        "",
-        f"<b>{html.escape(dish['name'])}</b>",
-        "",
-        "Как вам?",
-    ]
-    ref = f"{served_names_tag(served)}|{i}"
-    markup = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("👍 Вкусно", callback_data=f"rt|{ref}|up"),
-            InlineKeyboardButton("👎 Не очень", callback_data=f"rt|{ref}|down"),
-        ],
-        [InlineKeyboardButton("Пропустить →", callback_data=f"rt|{ref}|skip")],
-    ])
-    return "\n".join(lines), markup
-
-
-def build_portion_card(served, i):
-    """Шаг 2 для блюда i: текст карточки (HTML) и кнопки порции."""
-    text = f"<b>{html.escape(served[i]['name'])}</b>\n\nКакой была порция?"
-    ref = f"{served_names_tag(served)}|{i}"
-    markup = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Маловато", callback_data=f"rp|{ref}|little"),
-            InlineKeyboardButton("В самый раз", callback_data=f"rp|{ref}|right"),
-            InlineKeyboardButton("Многовато", callback_data=f"rp|{ref}|much"),
-        ],
-        [InlineKeyboardButton("Пропустить →", callback_data=f"rp|{ref}|skip")],
-    ])
-    return text, markup
-
-
-async def show_next_dish(query, served, i, date):
-    """Перерисовывает карточку на шаг 1 блюда i, а если блюда кончились —
-    на финальное «Готово» и запоминает, что человек оценку за date прошёл."""
-    if i < len(served):
-        text, markup = build_taste_card(served, i)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-    else:
-        mark_rated(query.from_user.id, date)
-        await query.edit_message_text(RATE_DONE_TEXT, parse_mode="HTML")
-
-
-def parse_rating_button(data, served):
-    """Разбирает "rt|fp|i|v" / "rp|fp|i|v". Возвращает (i, v) или None,
-    если карточка не относится к сегодняшнему списку блюд."""
-    parts = data.split("|")
-    if len(parts) != 4 or not parts[2].isdigit():
-        return None
-    _, tag, idx, value = parts
-    i = int(idx)
-    if not served or served_names_tag(served) != tag or i >= len(served):
-        return None
-    return i, value
-
-
-async def rate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-        served = load_served(today)
-        if not served:
-            await update.message.reply_text("Сегодня ещё нечего оценивать.")
-            return
-        if str(update.effective_user.id) in load_rated(today):
-            await update.message.reply_text(RATE_ALREADY_TEXT)
-            return
-        text, markup = build_taste_card(served, 0)
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
-    except Exception as e:
-        logger.error(f"/rate упал с ошибкой: {e}", exc_info=True)
-        await update.message.reply_text("Something went wrong showing today's dishes — the error has been logged.")
-
-
-async def send_rating_cards(context: ContextTypes.DEFAULT_TYPE):
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    served = load_served(today)
-    if not served:
-        return
-    text, markup = build_taste_card(served, 0, intro=RATE_INTRO)
-    already_rated = load_rated(today)
-    family = load_family()
-    for user_id in family:
-        if str(user_id) in already_rated:
-            continue
-        try:
-            await context.bot.send_message(
-                chat_id=int(user_id),
-                text=text,
-                parse_mode="HTML",
-                reply_markup=markup,
-            )
-        except Exception as e:
-            logger.warning(f"Не удалось отправить карточку оценки {user_id}: {e}")
-
-
-async def rate_taste_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    served = load_served(today)
-    parsed = parse_rating_button(query.data, served)
-    if parsed is None:
-        await query.edit_message_text(RATE_STALE_TEXT)
-        return
-    if str(query.from_user.id) in load_rated(today):
-        await query.edit_message_text(RATE_ALREADY_TEXT)
-        return
-    i, value = parsed
-    if value == "skip":
-        await show_next_dish(query, served, i + 1, today)
-        return
-    if value not in ("up", "down"):
-        return
-    record_rating(served[i]["name"], value)
-    text, markup = build_portion_card(served, i)
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-
-
-async def rate_portion_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    served = load_served(today)
-    parsed = parse_rating_button(query.data, served)
-    if parsed is None:
-        await query.edit_message_text(RATE_STALE_TEXT)
-        return
-    if str(query.from_user.id) in load_rated(today):
-        await query.edit_message_text(RATE_ALREADY_TEXT)
-        return
-    i, value = parsed
-    if value in ("little", "right", "much"):
-        record_rating(served[i]["name"], f"portion_{value}")
-    elif value != "skip":
-        return
-    await show_next_dish(query, served, i + 1, today)
-
-
-async def rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    _, direction, ref = query.data.split("|", 2)
-    dish_name = resolve_rated_dish(ref)
-    if dish_name is None:
-        await query.edit_message_text("This rating card has expired — use /rate for today's dishes.")
-        return
-    record_rating(dish_name, direction)
-    await query.edit_message_text(f"Thanks! Recorded your rating for {dish_name}.")
-
-
-async def portion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    _, size, ref = query.data.split("|", 2)
-    dish_name = resolve_rated_dish(ref)
-    if dish_name is None:
-        await query.edit_message_text("This rating card has expired — use /rate for today's dishes.")
-        return
-    record_rating(dish_name, f"portion_{size}")  # portion_little / portion_right / portion_much
-    await query.edit_message_text(f"Thanks! Recorded portion feedback for {dish_name}.")
 
 
 async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1191,7 +893,6 @@ async def receive_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYP
         "name": user.first_name,
         "breakfast": breakfast_pick,
         "dinner": dinner_pick,
-        "notes": data.get("notes", ""),
         "vote_weight": vote_weight,
     }
     save_today_responses(responses)
@@ -1615,37 +1316,13 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Не удалось предупредить создателя: {e}")
 
-    # Семье — русские названия (title_ru): /rate, карточки оценки, история.
-    served = []
-    for meal in ("breakfast", "dinner"):
-        for course in MEAL_ORDER[meal]:
-            if course in menu[meal]:
-                served.append({"name": CATALOG[menu[meal][course]["dish_id"]]["title_ru"], "meal": meal})
-    # Сборка вечером собирает меню на завтра — /rate и карточки в 18:00
-    # завтра будут читать именно этот ключ.
-    tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
-    save_served(tomorrow, served)
-    served_names = [entry["name"] for entry in served]
-
-    recent = load_json(RECENT_DISHES_FILE, [])
-    today_str = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    # Повторная сборка в тот же день (/forcecompile) заменяет запись, а не дублирует
-    recent = [entry for entry in recent if entry.get("date") != today_str]
-    recent.append({"date": today_str, "dishes": served_names})
-    recent = recent[-RECENT_DISHES_DAYS:]  # храним только последние N дней
-    save_json(RECENT_DISHES_FILE, recent)
-
     # Повторная сборка за день (/forcecompile) не должна второй раз вычитать
-    # запасы и дописывать недостачу — откатываемся к состоянию до первой.
+    # запасы — откатываемся к состоянию до первой.
     if snapshot:
         save_inventory(snapshot["inventory"])
-        save_json(WEEKLY_SHORTFALL_FILE, snapshot["weekly_shortfall"])
         logger.info("Повторная сборка за сегодня — восстановил запасы до первой сборки")
     else:
-        snapshot = {
-            "inventory": load_inventory(),
-            "weekly_shortfall": load_json(WEEKLY_SHORTFALL_FILE, {}),
-        }
+        snapshot = {"inventory": load_inventory()}
         save_json(snapshot_file, snapshot)
 
     updated_inventory, shortfall = plan_stock_usage(menu, load_inventory())
@@ -1653,14 +1330,6 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
     await check_low_stock_and_alert(context, updated_inventory)
 
     if shortfall:
-        weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
-        for name, item in shortfall.items():
-            if name in weekly:
-                weekly[name]["amount"] = round(weekly[name]["amount"] + item["amount"], 1)
-                weekly[name]["unit"] = item["unit"]
-            else:
-                weekly[name] = {"amount": item["amount"], "unit": item["unit"]}
-        save_json(WEEKLY_SHORTFALL_FILE, weekly)
         # Блюда по отдельности проходили проверку, а вместе (например, два
         # блюда на один сыр) или с завтраком школьников запасов не хватает.
         text = shortfall_alert_text(shortfall)
@@ -1711,9 +1380,6 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.5)
     logger.info(f"Недельный список покупок: {len(messages)} сообщ., длины {[len(m) for m in messages]}, "
                 f"получатели {recipients}")
-
-    # /shoppinglist shows what ran short during the week; a new week starts now.
-    save_json(WEEKLY_SHORTFALL_FILE, {})
 
 
 def menu_today_payload():
@@ -1812,18 +1478,12 @@ def main():
     app.add_handler(CommandHandler("updatestock", updatestock_cmd))
     app.add_handler(CommandHandler("restock", restock))
     app.add_handler(CommandHandler("whatstobuy", whatstobuy_cmd))
-    app.add_handler(CommandHandler("shoppinglist", shoppinglist_cmd))
+    app.add_handler(CommandHandler("shoppinglist", whatstobuy_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("rate", rate_cmd))
-    app.add_handler(CommandHandler("regenmenu", regenmenu_cmd))
     app.add_handler(CommandHandler("forcecompile", forcecompile_cmd))
     app.add_handler(CommandHandler("previewcook", previewcook_cmd))
     app.add_handler(CommandHandler("people", people_cmd))
     app.add_handler(CallbackQueryHandler(people_cb, pattern=r"^hc\|"))
-    app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
-    app.add_handler(CallbackQueryHandler(portion_callback, pattern=r"^portion\|"))
-    app.add_handler(CallbackQueryHandler(rate_taste_cb, pattern=r"^rt\|"))
-    app.add_handler(CallbackQueryHandler(rate_portion_cb, pattern=r"^rp\|"))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, receive_web_app_data))
 
     job_queue = app.job_queue
@@ -1837,10 +1497,6 @@ def main():
     job_queue.run_daily(
         alert_empty_main,
         time=dtime(hour=EMPTY_MAIN_ALERT_HOUR, minute=EMPTY_MAIN_ALERT_MINUTE, tzinfo=TIMEZONE),
-    )
-    job_queue.run_daily(
-        send_rating_cards,
-        time=dtime(hour=NUDGE_HOUR, minute=NUDGE_MINUTE, tzinfo=TIMEZONE),
     )
     job_queue.run_daily(
         compile_and_send_to_cook,

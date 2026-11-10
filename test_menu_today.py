@@ -168,7 +168,6 @@ def compile_with(votes, stock):
         f.unlink()
     set_stock(stock)
     set_people()
-    bot.save_json(bot.WEEKLY_SHORTFALL_FILE, {})
     bot.save_today_responses({"1": {"name": "Тест", "breakfast": votes.get("breakfast", {}),
                                     "dinner": votes.get("dinner", {}), "vote_weight": 1}})
     sent = run(bot.compile_and_send_to_cook)
@@ -208,7 +207,9 @@ expect("общий продукт — нехватка создателю и г�
 ru = bot.stock_name_ru(shared_key)
 check(f"в сообщении есть «{ru} — …»: {alerts[:1]}",
       alerts and f"{ru} — " in alerts[0][1] and alerts[0][1].endswith("Купите до готовки. /whatstobuy"))
-check("недостача ушла в недельный список", shared_key in bot.load_json(bot.WEEKLY_SHORTFALL_FILE, {}))
+left, _ = bot.inventory_as_english_stock()
+check(f"общий продукт списан до нуля и попадёт в список покупок: {left.get(shared_key)}",
+      left.get(shared_key, 0) <= 1e-6)
 check("повару ушли оба блюда", bot.CATALOG[id1]["title"] in cook and bot.CATALOG[id2]["title"] in cook)
 check("в сообщении повару нет русского текста о нехватке", SHORT_PREFIX not in cook)
 

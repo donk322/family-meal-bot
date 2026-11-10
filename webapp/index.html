@@ -80,28 +80,8 @@
   .dish-name { font-size: 14px; font-weight: 500; margin: 0 0 2px; }
   .dish-desc { font-size: 12px; color: var(--tg-theme-hint-color, #8a8a8a); margin: 0; }
   .unavailable-label { font-size: 11px; color: #c0392b; font-weight: 500; margin: 2px 0 0; }
-  label.notes-label {
-    display: block; font-family: var(--heading-font); font-size: 18px; font-style: italic;
-    color: var(--accent); margin-bottom: 10px;
-  }
-  textarea {
-    width: 100%; min-height: 56px; border-radius: 12px;
-    border: 1px solid var(--tg-theme-hint-color, #d8d8d8);
-    background: var(--tg-theme-secondary-bg-color, #f5f5f5);
-    color: var(--tg-theme-text-color, #1c1c1c);
-    padding: 12px 14px; font-size: 15px; font-family: inherit; resize: vertical;
-  }
-  textarea:focus { outline: none; border-color: var(--accent); }
   .error { color: #c0392b; font-size: 13px; margin-top: 4px; display: none; }
   .footnote { font-size: 12px; color: var(--tg-theme-hint-color, #999); text-align: center; margin-top: 8px; }
-  .doneness-panel { padding: 4px 8px 10px 46px; margin: -8px 0 8px; }
-  .doneness-label { font-size: 12px; color: var(--tg-theme-hint-color, #8a8a8a); margin: 6px 0 6px; }
-  .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
-  .pill {
-    border: 1px solid var(--tg-theme-hint-color, #d8d8d8); color: var(--tg-theme-text-color, #1c1c1c);
-    background: transparent; border-radius: 16px; padding: 5px 12px; font-size: 12px; cursor: pointer;
-  }
-  .pill.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 500; }
   .loading { text-align: center; padding: 60px 20px; color: var(--tg-theme-hint-color, #999); }
   .empty-note { font-size: 12px; color: var(--tg-theme-hint-color, #999); font-style: italic; }
 </style>
@@ -119,10 +99,6 @@
     <p class="sub">Меню сегодня придумано под то, что реально есть на кухне — выбери по одному варианту в каждом разделе, побеждают самые популярные.</p>
     <hr class="rule">
     <div id="sections"></div>
-    <section>
-      <label class="notes-label" for="notes">Комментарии</label>
-      <textarea id="notes" placeholder="Аллергии, нелюбимые продукты, гости и т.д. (необязательно)"></textarea>
-    </section>
     <p class="footnote">Все блюда в меню без глютена</p>
   </div>
 
@@ -146,9 +122,6 @@
     ],
   };
 
-  const EGG_OPTIONS = ["Жидкий желток", "Средний желток", "Полностью готовый"];
-  const MEAT_OPTIONS = ["С кровью", "Слабой прожарки", "Средней прожарки", "Почти прожаренное", "Полностью прожаренное"];
-
   const tg = window.Telegram?.WebApp;
   if (tg) {
     tg.ready();
@@ -158,31 +131,7 @@
   }
 
   const selection = {}; // "breakfast.main" -> dishId, "dinner.side" -> dishId, etc.
-  const donenessPrefs = {}; // dishId -> {egg?, meat?}
   const relaxedRequired = new Set(); // "dinner.main" — обязательная, но сегодня пустая
-
-  function buildPillRow(dishId, kind, options, panel) {
-    const label = document.createElement('p');
-    label.className = 'doneness-label';
-    label.textContent = kind === 'egg' ? 'Как приготовить яйцо' : 'Прожарка мяса';
-    panel.appendChild(label);
-    const row = document.createElement('div');
-    row.className = 'pill-row';
-    options.forEach(opt => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'pill';
-      btn.textContent = opt;
-      btn.onclick = () => {
-        donenessPrefs[dishId] = donenessPrefs[dishId] || {};
-        donenessPrefs[dishId][kind] = opt;
-        [...row.children].forEach(b => b.classList.remove('selected'));
-        btn.classList.add('selected');
-      };
-      row.appendChild(btn);
-    });
-    panel.appendChild(row);
-  }
 
   function renderCategory(meal, cat, dishes) {
     const section = document.createElement('section');
@@ -228,29 +177,18 @@
           </div>
         `;
 
-        let panel = null;
-        if (dish.customize && dish.customize.length) {
-          panel = document.createElement('div');
-          panel.className = 'doneness-panel';
-          panel.style.display = 'none';
-          if (dish.customize.includes('egg')) buildPillRow(dish.id, 'egg', EGG_OPTIONS, panel);
-          if (dish.customize.includes('meat')) buildPillRow(dish.id, 'meat', MEAT_OPTIONS, panel);
-        }
-
         card.onclick = () => {
           const already = selection[selKey] === dish.id;
-          cards.forEach(c => { c.card.classList.remove('selected'); if (c.panel) c.panel.style.display = 'none'; });
+          cards.forEach(c => c.classList.remove('selected'));
           if (already) {
             delete selection[selKey];
           } else {
             selection[selKey] = dish.id;
             card.classList.add('selected');
-            if (panel) panel.style.display = 'block';
           }
         };
         listDiv.appendChild(card);
-        if (panel) listDiv.appendChild(panel);
-        cards.push({ card, panel });
+        cards.push(card);
       });
     }
 
@@ -296,12 +234,6 @@
     }
   });
 
-  function pickWithDoneness(dishId) {
-    if (!dishId) return null;
-    const prefs = donenessPrefs[dishId];
-    return prefs ? { id: dishId, ...prefs } : { id: dishId };
-  }
-
   function submit() {
     let ok = true;
     for (const meal of ['breakfast', 'dinner']) {
@@ -321,10 +253,10 @@
     const payload = { type: 'menu', breakfast: {}, dinner: {} };
     for (const meal of ['breakfast', 'dinner']) {
       for (const cat of CATEGORY_CONFIG[meal]) {
-        payload[meal][cat.key] = pickWithDoneness(selection[`${meal}.${cat.key}`]);
+        const dishId = selection[`${meal}.${cat.key}`];
+        payload[meal][cat.key] = dishId ? { id: dishId } : null;
       }
     }
-    payload.notes = document.getElementById('notes').value.trim();
 
     if (tg) {
       tg.sendData(JSON.stringify(payload));

@@ -8,8 +8,6 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
       - key: MINI_APP_URL
         sync: false
       - key: STOCK_APP_URL
