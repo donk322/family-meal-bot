@@ -29,10 +29,10 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import BadRequest
-from anthropic import Anthropic
 
 from catalog.scale_recipe import load_catalog, render_dish, countdown_lines, scaled_ingredients
 from catalog.stock_check import check_dish, subtract_for_dish, to_stock_unit, CONV
+from catalog.shopping_list import build_shopping_messages
 
 load_dotenv()
 
@@ -40,7 +40,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 MINI_APP_URL = os.environ["MINI_APP_URL"]
 STOCK_APP_URL = os.environ.get("STOCK_APP_URL", "")
 COOK_CHAT_ID = int(os.environ.get("COOK_CHAT_ID", "0") or 0)
@@ -78,9 +77,6 @@ BREAKFAST_PEOPLE = int(os.environ.get("BREAKFAST_PEOPLE", "5"))
 DINNER_PEOPLE = int(os.environ.get("DINNER_PEOPLE", "7"))
 HEADCOUNT_MIN, HEADCOUNT_MAX = 1, 30
 
-# /whatstobuy reports shortfall for a full family-size batch, not one serving.
-WHATSTOBUY_SERVINGS = int(os.environ.get("WHATSTOBUY_SERVINGS", "8"))
-
 # The two kids eat breakfast separately and earlier — just the winning
 # main dish, at a fixed headcount regardless of how the vote went.
 KIDS_BREAKFAST_COUNT = int(os.environ.get("KIDS_BREAKFAST_COUNT", "2"))
@@ -102,7 +98,6 @@ RATED_TODAY_FILE = DATA_DIR / "rated_today.json"  # {"date": "YYYY-MM-DD", "user
 HEADCOUNT_FILE = DATA_DIR / "headcount.json"  # {"breakfast": null|int, "dinner": null|int}, null = как обычно
 RECENT_DISHES_DAYS = int(os.environ.get("RECENT_DISHES_DAYS", "5"))
 
-client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Фиксированное меню: 56 блюд из catalog/dishes_fixed.json (собраны из
 # recipes_src/*.txt). ИИ меню не придумывает, количества пересчитывает код.
@@ -139,8 +134,8 @@ def pool(meal, course):
 
 
 # The cook is English-speaking — translate ingredient names/units wherever
-# they're shown to them directly (outside the Claude-generated menu, which
-# is translated via the prompt instead).
+# they're shown to them directly (the recipes in catalog/ are already in English).
+# Old inventory items are stored under these Russian keys.
 INGREDIENT_EN = {
     "авокадо": "avocado", "банан": "banana",
     "безглютеновый хлеб": "gluten-free bread",
@@ -599,7 +594,24 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"chat_id этого чата: {update.effective_chat.id}")
 
 
+STOCK_ONLY_TEXT = "Sorry, this command is only for the cook and the family head."
+
+
+async def check_stock_access(update: Update, command: str) -> bool:
+    """Stock commands (/stock, /addstock, /removestock, /whatstobuy): the cook
+    (COOK_CHAT_ID, also as the chat the command came from) and the admins."""
+    user, chat = update.effective_user, update.effective_chat
+    allowed = bool(COOK_CHAT_ID and (user.id == COOK_CHAT_ID or (chat and chat.id == COOK_CHAT_ID))) \
+        or is_admin(user)
+    logger.info(f"/{command} от id={user.id}, чат={chat.id if chat else None}, доступ={'да' if allowed else 'нет'}")
+    if not allowed:
+        await update.message.reply_text(STOCK_ONLY_TEXT)
+    return allowed
+
+
 async def stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_stock_access(update, "stock"):
+        return
     inventory = load_inventory()
     if not inventory:
         await update.message.reply_text("Stock is currently empty — nothing recorded yet.")
@@ -608,7 +620,73 @@ async def stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Current stock:\n" + "\n".join(lines))
 
 
+# /addstock units: typed unit -> (dimension, factor to the dimension's base: g / ml / pcs)
+ADDSTOCK_UNITS = {
+    "g": ("mass", 1), "kg": ("mass", 1000), "г": ("mass", 1), "кг": ("mass", 1000),
+    "ml": ("volume", 1), "l": ("volume", 1000), "мл": ("volume", 1), "л": ("volume", 1000),
+    "pcs": ("count", 1), "pc": ("count", 1), "шт": ("count", 1),
+}
+EN_TO_RU_UNIT = {"g": "г", "kg": "кг", "ml": "мл", "l": "л", "pcs": "шт", "pc": "шт"}
+ADDSTOCK_COMPACT_FROM = 6   # more than 5 lines -> one compact report
+ADDSTOCK_REPORT_LIMIT = 3800
+
+
+def parse_addstock_line(line):
+    """'<product> <amount> <unit>' -> (name, amount, unit) or an error string."""
+    parts = line.split()
+    if len(parts) < 3:
+        return "не разобрать строку (нужно: название количество единица)"
+    try:
+        amount = float(parts[-2].replace(",", "."))
+    except ValueError:
+        return f"«{parts[-2]}» — не число"
+    if not 0 < amount < 1e7:          # also rejects nan and inf
+        return f"«{parts[-2]}» — количество должно быть больше нуля"
+    unit = parts[-1].lower()
+    if unit not in ADDSTOCK_UNITS:
+        return f"непонятная единица «{parts[-1]}» (можно g, kg, ml, l, pcs)"
+    return " ".join(parts[:-2]).strip(), amount, unit
+
+
+def add_to_inventory(inventory, name, amount, unit):
+    """Adds to the inventory in place. A product known in INGREDIENT_EN is kept
+    under its Russian key and unit. An existing item keeps its unit: 500 g added
+    to an item in кг becomes +0.5 кг. Returns (key, added, total, unit shown)
+    or an error string when the units don't fit (g vs pcs)."""
+    ru_key = next((ru for ru, en in INGREDIENT_EN.items() if en.lower() == name.lower()), None)
+    key = ru_key or next((k for k in inventory if k.lower() == name.lower()), name)
+    dim, factor = ADDSTOCK_UNITS[unit]
+    existing = inventory.get(key)
+    if existing:
+        have_unit = existing.get("unit", "")
+        have_dim, have_factor = ADDSTOCK_UNITS.get(have_unit.lower(), (None, 1))
+        if have_dim != dim:
+            return f"в запасах «{name}» в «{unit_to_en(have_unit)}», а добавляют «{unit}»"
+        added = amount * factor / have_factor
+        existing["amount"] = round(float(existing.get("amount", 0)) + added, 2)
+        return key, round(added, 2), existing["amount"], unit_to_en(have_unit)
+    store_unit = EN_TO_RU_UNIT.get(unit, unit) if ru_key else ("pcs" if unit == "pc" else unit)
+    inventory[key] = {"amount": round(amount, 2), "unit": store_unit}
+    return key, round(amount, 2), inventory[key]["amount"], unit_to_en(store_unit)
+
+
+def chunk_text(lines, limit):
+    """Joins lines into messages no longer than limit characters."""
+    msgs, cur = [], ""
+    for ln in lines:
+        if cur and len(cur) + 1 + len(ln) > limit:
+            msgs.append(cur)
+            cur = ln
+        else:
+            cur = f"{cur}\n{ln}" if cur else ln
+    if cur:
+        msgs.append(cur)
+    return msgs
+
+
 async def addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_stock_access(update, "addstock"):
+        return
     full_text = update.message.text or ""
     # Убираем саму команду "/addstock" из первой строки, если она там есть
     lines = [full_text.split("\n", 1)[0].replace("/addstock", "", 1).strip()] \
@@ -627,45 +705,41 @@ async def addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    results = []
+    inventory = load_inventory()
+    added, errors = [], []
     for line in lines:
-        parts = line.split()
-        if len(parts) < 3:
-            results.append(f"Skipped (couldn't read): {line}")
+        parsed = parse_addstock_line(line)
+        if isinstance(parsed, str):
+            errors.append((line, parsed))
             continue
-        try:
-            amount = float(parts[-2])
-        except ValueError:
-            results.append(f"Skipped (couldn't read amount): {line}")
+        name, amount, unit = parsed
+        result = add_to_inventory(inventory, name, amount, unit)
+        if isinstance(result, str):
+            errors.append((line, result))
             continue
-
-        unit_en_raw = parts[-1].lower()
-        name_en = " ".join(parts[:-2]).strip()
-
-        EN_TO_RU_UNIT = {"g": "г", "kg": "кг", "ml": "мл", "l": "л", "pcs": "шт", "pc": "шт"}
-        unit_ru = EN_TO_RU_UNIT.get(unit_en_raw, unit_en_raw)
-
-        ru_key = None
-        for ru_name, en_name in INGREDIENT_EN.items():
-            if en_name.lower() == name_en.lower():
-                ru_key = ru_name
-                break
-
-        inventory = load_inventory()
-        key = ru_key if ru_key else name_en
-        store_unit = unit_ru if ru_key else unit_en_raw
-        existing = inventory.get(key, {"amount": 0, "unit": store_unit})
-        existing["amount"] = round(existing.get("amount", 0) + amount, 2)
-        existing["unit"] = store_unit
-        inventory[key] = existing
+        added.append((name, *result[1:]))
+    if added:
         save_inventory(inventory)
 
-        results.append(f"Added {amount} {unit_en_raw} of {name_en}. Total now: {existing['amount']} {unit_en_raw}.")
+    if len(lines) >= ADDSTOCK_COMPACT_FROM:
+        report = [f"Добавлено {len(added)} позиций:"]
+        report += [f"{name}: +{fmt_amount(plus)} {u} → {fmt_amount(total)} {u}" for name, plus, total, u in added]
+        if errors:
+            report += ["", f"Не добавлено ({len(errors)}):"] + [f"• {ln} — {why}" for ln, why in errors]
+        for msg in chunk_text(report, ADDSTOCK_REPORT_LIMIT):
+            await update.message.reply_text(msg)
+            await asyncio.sleep(0.5)
+        return
 
+    results = [f"Added {fmt_amount(plus)} {u} of {name}. Total now: {fmt_amount(total)} {u}."
+               for name, plus, total, u in added]
+    results += [f"Skipped: {ln} — {why}" for ln, why in errors]
     await update.message.reply_text("\n".join(results))
 
 
 async def removestock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_stock_access(update, "removestock"):
+        return
     name = " ".join(context.args).strip()
     inventory = load_inventory()
     # Ищем без учёта регистра
@@ -710,53 +784,18 @@ async def restock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Готово, запасы пополнены по последнему списку покупок.")
 
 
-WHATSTOBUY_TOP = 15
-
-
-def whatstobuy_ranking(stock):
-    """Like catalog/report_now.py: for every product that blocks a dish (at its
-    base number of portions) -> how many dishes wait for ONLY this product,
-    in how many dishes it is short, and the biggest shortfall in stock units.
-    Returns (blocked dish count, [(key, only, any, shortfall)] best first)."""
-    only, anyc, short = Counter(), Counter(), {}
-    blocked = 0
-    for dish in CATALOG.values():
-        ok, missing = check_dish(dish, dish["base_portions"], stock)
-        if ok:
-            continue
-        blocked += 1
-        keys = [m[0] for m in missing]
-        for key, need, have in missing:
-            anyc[key] += 1
-            short[key] = max(short.get(key, 0), need - have)
-        if len(keys) == 1:
-            only[keys[0]] += 1
-    ranking = sorted(anyc, key=lambda k: (-only[k], -anyc[k], k))
-    return blocked, [(k, only[k], anyc[k], short[k]) for k in ranking]
-
-
 def fmt_amount(x):
-    return f"{x:.1f}".rstrip("0").rstrip(".")
+    return f"{x:.2f}".rstrip("0").rstrip(".")
 
 
 async def whatstobuy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stock, _ = inventory_as_english_stock()
-    blocked, ranking = whatstobuy_ranking(stock)
-    if not ranking:
-        await update.message.reply_text(
-            "Everything's in stock — every dish on the menu can be made right now."
-        )
+    """Shopping list (catalog/shopping_list.py), sent only to whoever asked."""
+    if not await check_stock_access(update, "whatstobuy"):
         return
-
-    lines = [
-        f"{i}. {key}: buy at least {fmt_amount(amount)} {stock_unit_for(key)}. "
-        f"Unlocks {only} dish{'es' if only != 1 else ''} on its own, missing in {n}."
-        for i, (key, only, n, amount) in enumerate(ranking[:WHATSTOBUY_TOP], 1)
-    ]
-    await update.message.reply_text(
-        f"{blocked} of {len(CATALOG)} dishes can't be made right now. "
-        "Buy these first to unlock the most dishes:\n\n" + "\n".join(lines)
-    )
+    stock, _ = inventory_as_english_stock()
+    for msg in build_shopping_messages(stock, CATALOG):
+        await update.message.reply_text(msg)
+        await asyncio.sleep(0.5)
 
 
 async def shoppinglist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -804,21 +843,21 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/updatestock — open a form to enter what's on hand after a "
         "shopping trip (shows everything currently tracked, including "
         "anything you've added with /addstock)\n"
-        "/addstock — add what you just bought, any product, any amount. "
+        "/addstock — add what you bought (you can paste many lines at once). "
         "Just say how much you bought — the bot adds it to what's already "
-        "there, you don't need to know or calculate the old total. You "
-        "can paste several lines at once, one product per line.\n"
+        "there, you don't need to know or calculate the old total. Units: "
+        "g, kg, ml, l, pcs.\n"
         "Example: bought 200g of tomatoes? Just send:\n"
         "/addstock tomato 200 g\n"
         "Works for anything, even something not seen before — just type "
         "the name.\n"
         "/removestock <name> — remove a product entirely, in case "
         "something got added by mistake\n"
-        "/whatstobuy — see which products to buy first to unlock the most "
-        "dishes from the menu, with amounts\n"
-        "/shoppinglist — see the current shopping list accumulated so far "
-        "this week (a fuller version also arrives automatically once a "
-        "week, grouped by store section)\n"
+        "/whatstobuy — shopping list: what to buy, how much, and for which "
+        "dishes, grouped by store section. It ends with ready /addstock "
+        "lines to send after shopping. The same list also arrives "
+        "automatically once a week\n"
+        "/shoppinglist — what ran short in this week's cooking so far\n"
         "/rate — rate today's dishes (👍/👎 for taste, and whether the "
         "portion size was right) — this shows which dishes the family "
         "likes\n"
@@ -1583,46 +1622,20 @@ async def send_weekly_shopping_list(context: ContextTypes.DEFAULT_TYPE):
         logger.warning("COOK_CHAT_ID не задан — некому отправлять список покупок")
         return
 
+    # Same list as /whatstobuy (catalog/shopping_list.py), built by code from
+    # the current stock — no AI.
+    stock, _ = inventory_as_english_stock()
+    messages = build_shopping_messages(stock, CATALOG)
+    for msg in messages:
+        try:
+            await context.bot.send_message(chat_id=COOK_CHAT_ID, text=msg)
+        except Exception as e:
+            logger.error(f"Не удалось отправить часть списка покупок повару: {e}")
+        await asyncio.sleep(0.5)
+    logger.info(f"Недельный список покупок: {len(messages)} сообщ., длины {[len(m) for m in messages]}")
+
+    # /restock adds back whatever was in the last weekly shortfall — kept as before
     weekly = load_json(WEEKLY_SHORTFALL_FILE, {})
-    if not weekly:
-        await context.bot.send_message(
-            chat_id=COOK_CHAT_ID,
-            text="This week's shopping list: everything needed is already in stock, nothing to buy.",
-        )
-        return
-
-    items_text = "\n".join(
-        f"{to_en(name)}: {item['amount']} {unit_to_en(item['unit'])}"
-        for name, item in weekly.items()
-    )
-    group_prompt = (
-        "Сгруппируй этот список покупок по типичным отделам "
-        "супермаркета (Meat & Fish, Dairy & Eggs, Produce, Pantry, "
-        "Other — используй только те заголовки, для которых реально "
-        "есть товары). Выведи только сгруппированный список, без "
-        "предисловий и заключений, каждый отдел с заголовком, товары "
-        "списком под ним:\n\n" + items_text
-    )
-    try:
-        group_message = client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": group_prompt}],
-        )
-        grouped_text = "".join(
-            b.text for b in group_message.content if b.type == "text"
-        ).strip()
-    except Exception as e:
-        logger.warning(f"Не удалось сгруппировать список покупок: {e}")
-        grouped_text = items_text  # запасной вариант — обычный плоский список
-
-    text = (
-        "This week's shopping list:\n\n" + grouped_text +
-        "\n\nOnce you've bought everything, send the bot /restock to update stock levels."
-    )
-    await context.bot.send_message(chat_id=COOK_CHAT_ID, text=text)
-
-    # /restock adds back whatever was in the last sent list — now that's this weekly one
     save_json(LAST_SHOPPING_LIST_FILE, weekly)
     save_json(WEEKLY_SHORTFALL_FILE, {})
 

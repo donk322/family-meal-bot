@@ -9,6 +9,7 @@ except ImportError:
 STOCK_GROUPS = {
     "mushrooms": ["mushrooms", "chopped mushrooms", "oyster mushrooms", "shiitake mushrooms", "shimeji mushrooms"],
     "berries": ["berries", "raspberries"],
+    "raspberries": ["raspberries", "berries"],   # малину в рецепте может покрыть смесь ягод
     "bell pepper": ["bell pepper", "mixed peppers"],
     "smoked salmon": ["smoked salmon", "lightly salted salmon"],
 }
