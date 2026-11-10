@@ -399,6 +399,30 @@ async def forcecompile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Сборка завершена — подробности в логах, если повару ничего не пришло.")
 
 
+async def previewcook_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the caller the cook's messages for the current votes, built by the
+    same code as compile_and_send_to_cook. Nothing is written: no stock
+    subtraction, no served_by_date, no history, nothing goes to the cook."""
+    if not await check_admin(update, "previewcook"):
+        return
+    responses = load_today_responses()
+    if not responses:
+        await update.message.reply_text("Пока никто не голосовал")
+        return
+    menu, dropped = drop_unknown_dishes(compute_daily_menu(responses))
+    if not menu["breakfast"] and not menu["dinner"]:
+        await update.message.reply_text("Пока никто не голосовал")
+        return
+    messages = cook_messages(menu)
+    note = f"Предпросмотр для повара: {len(messages)} сообщ. Повару ничего не отправлено, запасы не списаны."
+    if dropped:
+        note += "\nПропущены блюда, которых нет в каталоге: " + ", ".join(dropped)
+    await update.message.reply_text(note)
+    for m in messages:
+        await update.message.reply_text(m)
+        await asyncio.sleep(0.5)
+
+
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"chat_id этого чата: {update.effective_chat.id}")
 
@@ -626,6 +650,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/rate — rate today's dishes (👍/👎 for taste, and whether the "
         "portion size was right) — this shows which dishes the family "
         "likes\n"
+        "/previewcook — family head only: see tomorrow's cooking messages "
+        "for the current votes, sent only to you. Nothing goes to the cook "
+        "and stock is not changed\n"
         "/whoami — show this chat's ID (only needed once, during setup)\n"
         "/help — show this message again"
     )
@@ -1193,6 +1220,13 @@ def build_cook_pieces(menu, weekday):
     return [sanitize_plain(p) for p in pieces]
 
 
+def cook_messages(menu):
+    """The cook's Telegram messages for tomorrow — shared by
+    compile_and_send_to_cook and /previewcook."""
+    weekday = WEEKDAYS_EN[(datetime.now(TIMEZONE) + timedelta(days=1)).weekday()]
+    return pack_messages(build_cook_pieces(menu, weekday))
+
+
 def cooked_dishes(menu):
     """Everything the cook makes, in cooking order: the early kids' breakfast
     (the breakfast main for KIDS_BREAKFAST_COUNT + KIDS_BREAKFAST_BUFFER),
@@ -1298,8 +1332,7 @@ async def compile_and_send_to_cook(context: ContextTypes.DEFAULT_TYPE):
                 weekly[name] = {"amount": item["amount"], "unit": item["unit"]}
         save_json(WEEKLY_SHORTFALL_FILE, weekly)
 
-    weekday = WEEKDAYS_EN[(datetime.now(TIMEZONE) + timedelta(days=1)).weekday()]
-    messages = pack_messages(build_cook_pieces(menu, weekday))
+    messages = cook_messages(menu)
     logger.info(f"Сообщение повару: {len(messages)} частей, длины: {[len(m) for m in messages]}")
     for m in messages:
         try:
@@ -1463,6 +1496,7 @@ def main():
     app.add_handler(CommandHandler("rate", rate_cmd))
     app.add_handler(CommandHandler("regenmenu", regenmenu_cmd))
     app.add_handler(CommandHandler("forcecompile", forcecompile_cmd))
+    app.add_handler(CommandHandler("previewcook", previewcook_cmd))
     app.add_handler(CallbackQueryHandler(rate_callback, pattern=r"^rate\|"))
     app.add_handler(CallbackQueryHandler(portion_callback, pattern=r"^portion\|"))
     app.add_handler(CallbackQueryHandler(rate_taste_cb, pattern=r"^rt\|"))
