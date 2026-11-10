@@ -50,15 +50,38 @@ def to_stock_unit(key, unit, amount):
         return amount * conv[1]
     return amount
 
+# Допуск: продукта достаточно, если есть не меньше 90% нужного ИЛИ (для граммов
+# и миллилитров при потребности до 100) нехватка не больше 5 г/мл. Продукта нет
+# в запасах вообще или осталось 0 — его не хватает всегда, как бы мало ни было нужно.
+ENOUGH_SHARE = 0.9
+SMALL_NEED = 100
+SMALL_GAP = 5
+
+
+def stock_unit(key, unit):
+    """Единица склада для единицы рецепта (после CONV)."""
+    return CONV.get(key, {}).get(unit, (unit,))[0]
+
+
+def is_enough(need, have, unit):
+    """need и have — в единице склада unit (g, ml, pcs). have=None — продукта нет."""
+    if have is None or have <= 0:
+        return need <= 0
+    if have + 1e-9 >= need * ENOUGH_SHARE:
+        return True
+    return unit in ("g", "ml") and need <= SMALL_NEED and need - have <= SMALL_GAP + 1e-9
+
+
 def check_dish(dish, portions, stock):
-    """-> (ok, [(stock_key, нужно, есть)]) для ингредиентов, которых не хватает."""
+    """-> (ok, [(stock_key, нужно, есть)]) для ингредиентов, которых не хватает
+    (с допуском is_enough)."""
     missing = []
     for key, unit, amount, staple in scaled_ingredients(dish, portions):
         if staple:
             continue
         need = to_stock_unit(key, unit, amount)
         have = stock_amount(stock, key)
-        if have is None or have + 1e-9 < need * 0.98:      # допуск 2% на округление
+        if not is_enough(need, have, stock_unit(key, unit)):
             missing.append((key, round(need, 1), 0 if have is None else round(have, 1)))
     return (not missing), missing
 
